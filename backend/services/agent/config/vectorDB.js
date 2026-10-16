@@ -43,7 +43,7 @@ class VectorStore {
     if (!documents.length) return;
 
     // Keep embedding memory usage low.
-    const batchSize = 4;
+    const batchSize = 1;
 
     for (let start = 0; start < documents.length; start += batchSize) {
       const batch = documents.slice(start, start + batchSize);
