@@ -1,0 +1,66 @@
+import express from "express";
+import dotenv from "dotenv";
+import proxy from "express-http-proxy";
+import cors from "cors";
+import cookieParser from "cookie-parser";
+import protect from "./middleware/auth.middleware.js";
+import { getCurrentUser } from "./controllers/user.controller.js";
+import { ProxyWithHeader } from "./utils/ProxyWithHeader.js";
+dotenv.config();
+
+const app = express();
+app.use(express.json());
+app.use(express.json({ limit: "25mb" }));
+
+app.use(
+  express.urlencoded({
+    extended: true,
+    limit: "25mb",
+  }),
+);
+
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL,
+    credentials: true,
+  }),
+);
+
+app.use(cookieParser());
+
+app.use((req, res, next) => {
+  console.log("Gateway incoming request:", req.method, req.originalUrl);
+  next();
+});
+
+app.use("/api/auth", proxy(process.env.AUTH_SERVICE));
+app.use("/api/chat", protect, ProxyWithHeader(process.env.CHAT_SERVICE));
+
+const agentJsonProxy = ProxyWithHeader(process.env.AGENT_SERVICE);
+
+const agentFileProxy = ProxyWithHeader(process.env.AGENT_SERVICE, {
+  parseReqBody: false,
+});
+
+app.use("/api/agent", protect, (req, res, next) => {
+  if (req.is("multipart/form-data")) {
+    return agentFileProxy(req, res, next);
+  }
+
+  return agentJsonProxy(req, res, next);
+});
+
+app.use("/api/billing", protect, ProxyWithHeader(process.env.BILLING_SERVICE));
+
+app.get("/api/me", protect, getCurrentUser);
+
+app.get("/", (req, res) => {
+  res.json({
+    message: "Gateway is running",
+  });
+});
+
+const PORT = process.env.PORT || 8000;
+app.listen(PORT, () => {
+  console.log(`Gateway is running on port ${PORT}`);
+});

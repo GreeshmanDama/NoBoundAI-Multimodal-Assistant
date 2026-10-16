@@ -1,0 +1,13 @@
+node_modules/
+**/node_modules/
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!.env.example
+backend/data/
+backend/services/agent/temp/
+dist/
+coverage/
+backend/services/auth/ServiceAccountKey.json
