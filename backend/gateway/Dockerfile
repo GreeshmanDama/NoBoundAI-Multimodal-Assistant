@@ -1,18 +1,18 @@
 FROM node:24
 
-WORKDIR /app
+WORKDIR /app/backend
 
-COPY package*.json ./
+COPY backend/package*.json ./
 RUN npm install
 
-COPY ./gateway/package*.json ./gateway/
+COPY backend/gateway/package*.json ./gateway/
 RUN cd gateway && npm install
 
-COPY gateway ./gateway
-COPY shared ./shared
+COPY backend/gateway ./gateway
+COPY backend/shared ./shared
 
-WORKDIR /app/gateway
+WORKDIR /app/backend/gateway
 
 EXPOSE 8000
-CMD [ "npm", "start" ]
 
+CMD ["npm", "start"]
