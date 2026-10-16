@@ -1,29 +1,25 @@
-
 FROM node:24
 
-WORKDIR /app
+WORKDIR /app/backend
 
 # Install backend root dependencies
-COPY package*.json ./
+COPY backend/package*.json ./
 RUN npm install
 
-# Copy billing service package files into the correct directory
-COPY services/billing/package*.json ./services/billing/
+# Copy billing service package files
+COPY backend/services/billing/package*.json ./services/billing/
 
 # Install billing service dependencies
-WORKDIR /app/services/billing
+WORKDIR /app/backend/services/billing
 RUN npm install
 
 # Copy billing service source code
-WORKDIR /app
-COPY services/billing ./services/billing
+COPY backend/services/billing ./ 
 
 # Copy shared modules
-COPY shared ./shared
+COPY backend/shared /app/backend/shared
 
-# Run the billing service
-WORKDIR /app/services/billing
-
-EXPOSE 8004
+# Run billing service
+EXPOSE 8001
 
 CMD ["npm", "start"]

@@ -1,29 +1,25 @@
-
 FROM node:24
 
-WORKDIR /app
+WORKDIR /app/backend
 
 # Install backend root dependencies
-COPY package*.json ./
+COPY backend/package*.json ./
 RUN npm install
 
-# Copy chat service package files into the correct directory
-COPY services/chat/package*.json ./services/chat/
+# Copy chat service package files
+COPY backend/services/chat/package*.json ./services/chat/
 
 # Install chat service dependencies
-WORKDIR /app/services/chat
+WORKDIR /app/backend/services/chat
 RUN npm install
 
 # Copy chat service source code
-WORKDIR /app
-COPY services/chat ./services/chat
+COPY backend/services/chat ./ 
 
 # Copy shared modules
-COPY shared ./shared
+COPY backend/shared /app/backend/shared
 
-# Run the chat service
-WORKDIR /app/services/chat
-
-EXPOSE 8002
+# Run chat service
+EXPOSE 8001
 
 CMD ["npm", "start"]

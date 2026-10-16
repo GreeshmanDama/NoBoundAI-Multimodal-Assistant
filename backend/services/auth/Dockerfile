@@ -1,29 +1,25 @@
-
 FROM node:24
 
-WORKDIR /app
+WORKDIR /app/backend
 
 # Install backend root dependencies
-COPY package*.json ./
+COPY backend/package*.json ./
 RUN npm install
 
-# Copy auth service package files into the correct directory
-COPY services/auth/package*.json ./services/auth/
+# Copy Auth service package files
+COPY backend/services/auth/package*.json ./services/auth/
 
-# Install auth service dependencies
-WORKDIR /app/services/auth
+# Install Auth service dependencies
+WORKDIR /app/backend/services/auth
 RUN npm install
 
-# Copy auth service source code
-WORKDIR /app
-COPY services/auth ./services/auth
+# Copy Auth service source code
+COPY backend/services/auth ./ 
 
 # Copy shared modules
-COPY shared ./shared
+COPY backend/shared /app/backend/shared
 
-# Run the auth service
-WORKDIR /app/services/auth
-
+# Run Auth service
 EXPOSE 8001
 
 CMD ["npm", "start"]

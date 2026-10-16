@@ -1,25 +1,25 @@
-
 FROM node:24
 
-WORKDIR /app
+WORKDIR /app/backend
 
 # Install backend root dependencies
-COPY package*.json ./
+COPY backend/package*.json ./
 RUN npm install
 
-# Install agent dependencies
-COPY services/agent/package*.json ./services/agent/
+# Copy agent service package files
+COPY backend/services/agent/package*.json ./services/agent/
 
-WORKDIR /app/services/agent
+# Install agent service dependencies
+WORKDIR /app/backend/services/agent
 RUN npm install
 
-# Copy application source code
-WORKDIR /app
-COPY services/agent ./services/agent
-COPY shared ./shared
+# Copy agent service source code
+COPY backend/services/agent ./ 
 
-WORKDIR /app/services/agent
+# Copy shared modules
+COPY backend/shared /app/backend/shared
 
-EXPOSE 8003
+# Run agent service
+EXPOSE 8001
 
 CMD ["npm", "start"]
