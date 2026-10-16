@@ -1,15 +1,9 @@
-// import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
-
-// export const embeddings = new GoogleGenerativeAIEmbeddings({
-//   model: "gemini-embedding-001", // 768 dimensions
-// });
-
 import { pipeline } from "@huggingface/transformers";
 
 class EmbeddingManager {
   constructor() {
     this.model = null;
-    this.modelName = "Xenova/bge-base-en-v1.5";
+    this.modelName = "Xenova/all-MiniLM-L6-v2";
     this.loadPromise = this.loadModel();
   }
 
@@ -22,7 +16,9 @@ class EmbeddingManager {
         this.modelName
       );
 
-      console.log("Embedding model loaded successfully");
+      console.log(
+        `Embedding model loaded successfully: ${this.modelName}`
+      );
     } catch (error) {
       console.error("Error loading embedding model:", error);
       throw error;
@@ -31,6 +27,8 @@ class EmbeddingManager {
 
   async embedDocuments(texts) {
     await this.loadPromise;
+
+    if (!texts.length) return [];
 
     const output = await this.model(texts, {
       pooling: "mean",
