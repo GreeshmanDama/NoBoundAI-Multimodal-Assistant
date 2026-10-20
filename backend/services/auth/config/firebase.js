@@ -1,13 +1,12 @@
-import { cert, initializeApp } from "firebase-admin";
+import { cert, initializeApp, getApps } from "firebase-admin/app";
 import serviceAccount from "../ServiceAccountKey.json" with { type: "json" };
+import dotenv from "dotenv";
+dotenv.config();
 
 // export const app = initializeApp({
 //   credential: cert(serviceAccount),
 // });
 
-import { cert, initializeApp, getApps } from "firebase-admin/app";
-import dotenv from "dotenv";
-dotenv.config();
 
 const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 
