@@ -56,14 +56,15 @@ export const getConversations = async (req, res) => {
 
 export const saveMessage = async (req, res) => {
   try {
-    const { conversationId, role, content, images } = req.body;
+    const { conversationId, role, content, images, attachment } = req.body;
 
     // Save the message
     const message = await Message.create({
       conversationId,
       role,
       content,
-      images,
+      images: images ?? [],
+      ...(attachment && { attachment }),
     });
 
     // Update the parent conversation's timestamp
@@ -101,7 +102,7 @@ export const getMessages = async (req, res) => {
 
 export const deleteConversation = async (req, res) => {
   try {
-    console.log("entered delete conversation")
+    console.log("entered delete conversation");
     const { id } = req.params;
     const userId = req.headers["x-user-id"];
 

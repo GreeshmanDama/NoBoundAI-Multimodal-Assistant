@@ -292,6 +292,7 @@ function MessageList({ selectedAgent }) {
                 role={msg?.role}
                 content={msg?.content}
                 images={msg?.images || []}
+                attachment={msg?.attachment}
               />
             </div>
           ))}

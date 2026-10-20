@@ -1,4 +1,6 @@
 import redis from "../../shared/redis/redis.js";
+import dotenv from "dotenv"
+dotenv.config()
 
 const protect = async (req, res, next) => {
     try {

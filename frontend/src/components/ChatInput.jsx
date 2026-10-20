@@ -18,7 +18,11 @@ import { useDispatch, useSelector } from "react-redux";
 import sendMessage from "../features/sendMessage";
 import { createConversation } from "../features/createConversation";
 import updateConversation from "../features/updateConversation";
-import { addMessage, setInputMessage, setIsLoading } from "../redux/messageSlice";
+import {
+  addMessage,
+  setInputMessage,
+  setIsLoading,
+} from "../redux/messageSlice";
 import {
   addConversation,
   setCovTitle,
@@ -49,14 +53,15 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
     { id: "vision", icon: ImageIcon, label: "Image" },
   ];
 
-  const canSend = (value.trim().length > 0 || Boolean(selectedFile)) && !waitResponse;
+  const canSend =
+    (value.trim().length > 0 || Boolean(selectedFile)) && !waitResponse;
 
   // Keep the local input in sync with suggestions and other Redux updates.
   useEffect(() => {
     const setVal = () => {
       setValue(inputMessage ?? "");
-    }
-    setVal()
+    };
+    setVal();
   }, [inputMessage]);
 
   // Automatically resize the textarea, up to 240px.
@@ -67,7 +72,8 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
     textarea.style.height = "auto";
     const maxHeight = 240;
     textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
-    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+    textarea.style.overflowY =
+      textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }, [value]);
 
   const createConv = async () => {
@@ -115,17 +121,27 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
       const isFirstMessage = conversation.title === "New Chat";
 
       // Clear the composer immediately and add the user's message optimistically.
-      setValue("");
+      const attachment = selectedFile
+        ? {
+            name: selectedFile.name,
+            type: selectedFile.type === "application/pdf" ? "pdf" : "image",
+            size: selectedFile.size,
+          }
+        : undefined;
 
+      // Clear the composer immediately.
+      setValue("");
       dispatch(setInputMessage(""));
-      dispatch(setIsLoading(true))
+      dispatch(setIsLoading(true));
 
       removeSelectedFile();
 
+      // Add the user message with attachment metadata.
       dispatch(
         addMessage({
           role: "user",
-          content: prompt || `Uploaded file: ${selectedFile.name}`,
+          content: prompt,
+          attachment,
         }),
       );
 
@@ -163,7 +179,7 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
         }),
       );
 
-      dispatch(setIsLoading(false))
+      dispatch(setIsLoading(false));
 
       setSelectedFile(null);
       if (fileRef.current) fileRef.current.value = "";
@@ -185,7 +201,11 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
 
   // Enter sends; Shift + Enter creates a new line.
   const handleKeyDown = (event) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent?.isComposing) {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent?.isComposing
+    ) {
       event.preventDefault();
       if (!waitResponse) handleSendMessage();
     }
@@ -205,7 +225,9 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
     const lines = normalizedText.split("\n");
     const nonEmptyLines = lines.filter((line) => line.trim().length > 0);
     const minIndent = nonEmptyLines.length
-      ? Math.min(...nonEmptyLines.map((line) => line.match(/^[ \t]*/)[0].length))
+      ? Math.min(
+          ...nonEmptyLines.map((line) => line.match(/^[ \t]*/)[0].length),
+        )
       : 0;
 
     const cleanedText = lines
@@ -364,7 +386,9 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
                 disabled={!canSend}
                 onClick={handleSendMessage}
                 title={waitResponse ? "Generating response" : "Send message"}
-                aria-label={waitResponse ? "Generating response" : "Send message"}
+                aria-label={
+                  waitResponse ? "Generating response" : "Send message"
+                }
                 className={`flex h-9 w-9 items-center justify-center rounded-xl transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#111111] ${
                   canSend
                     ? "bg-white text-black shadow-[0_2px_12px_rgba(255,255,255,0.08)] hover:scale-[1.04] hover:bg-neutral-200 active:scale-95"

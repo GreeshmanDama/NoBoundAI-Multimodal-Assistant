@@ -8,13 +8,27 @@ export const agent = async (req, res, next) => {
     const { prompt, conversationId, agent } = req.body;
     const file = req.file;
 
-    console.log("prompt: ", prompt, "agent: ", agent);
+    console.log("prompt:", prompt, "agent:", agent);
 
     await redis.del(`messages-${conversationId}`);
 
     const userId = req.headers["x-user-id"];
 
-    // 1. Generate response first
+    // Build attachment metadata only; do not store the file itself.
+    const attachment = file
+      ? {
+          name: file.originalname,
+          type:
+            file.mimetype === "application/pdf"
+              ? "pdf"
+              : file.mimetype.startsWith("image/")
+                ? "image"
+                : "file",
+          size: file.size,
+        }
+      : undefined;
+
+    // 1. Generate response
     const result = await graph.invoke({
       prompt,
       conversationId,
@@ -23,32 +37,37 @@ export const agent = async (req, res, next) => {
       file,
     });
 
-    console.log("result:", result);
-
     const response = result.aiResponse;
 
-    // 2. Save user message
-    await addMessage(conversationId, "user", prompt);
+    // 2. Save user message in Redis memory
+    await addMessage(
+      conversationId,
+      "user",
+      prompt || (attachment ? `Uploaded file: ${attachment.name}` : ""),
+    );
 
+    // 3. Persist user message and attachment metadata in Chat service
     await axios.post(`${process.env.CHAT_SERVICE}/save-message`, {
       conversationId,
       role: "user",
-      content: prompt,
+      content: prompt || "",
+      ...(attachment && { attachment }),
     });
 
-    // 3. Save assistant response
+    // 4. Save assistant response in Redis memory
     await addMessage(conversationId, "assistant", response);
 
+    // 5. Persist assistant response
     await axios.post(`${process.env.CHAT_SERVICE}/save-message`, {
       conversationId,
       role: "assistant",
       content: response,
-      images: result.images,
+      images: result.images ?? [],
     });
 
     return res.status(200).json({
-      answer:response,
-      images: result.images,
+      answer: response,
+      images: result.images ?? [],
       success: true,
     });
   } catch (error) {
@@ -57,6 +76,6 @@ export const agent = async (req, res, next) => {
       error.response?.data || error.message,
     );
 
-    next(error)
+    next(error);
   }
 };

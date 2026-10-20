@@ -7,6 +7,7 @@ import {
   Download,
   FileText,
   Presentation,
+  ImageIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -170,7 +171,7 @@ function CodeBlock({ language, children }) {
    MESSAGE BUBBLE
 ========================================================= */
 
-function MessageBubble({ role, content, images = [] }) {
+function MessageBubble({ role, content, images = [], attachment }) {
   const isUser = role === "user";
 
   const [lightBox, setLightBox] = useState(null);
@@ -295,6 +296,58 @@ function MessageBubble({ role, content, images = [] }) {
             }
          `}
         >
+          {/* USER FILE ATTACHMENT */}
+          {isUser && attachment?.name && (
+            <div
+              className="
+      mb-3
+      flex
+      min-w-0
+      max-w-full
+      items-center
+      gap-3
+      rounded-xl
+      border
+      border-black/10
+      bg-black/4
+      px-3
+      py-2.5
+    "
+            >
+              <div
+                className={`
+        flex h-10 w-10 shrink-0 items-center justify-center rounded-lg
+        ${
+          attachment.type === "pdf"
+            ? "bg-red-500/10 text-red-600"
+            : "bg-indigo-500/10 text-indigo-600"
+        }
+      `}
+              >
+                {attachment.type === "pdf" ? (
+                  <FileText size={20} />
+                ) : (
+                  <ImageIcon size={20} />
+                )}
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <p
+                  className="truncate text-sm font-semibold text-black"
+                  title={attachment.name}
+                >
+                  {attachment.name}
+                </p>
+
+                <p className="mt-0.5 text-xs text-black/50">
+                  {attachment.type === "pdf" ? "PDF document" : "Image"}
+                  {Number.isFinite(attachment.size) &&
+                    attachment.size > 0 &&
+                    ` · ${(attachment.size / 1024 / 1024).toFixed(2)} MB`}
+                </p>
+              </div>
+            </div>
+          )}
           {/* =================================================
               IMAGES
           ================================================= */}
