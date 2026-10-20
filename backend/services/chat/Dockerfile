@@ -20,6 +20,6 @@ COPY backend/services/chat ./
 COPY backend/shared /app/backend/shared
 
 # Run chat service
-EXPOSE 8001
+EXPOSE 8002
 
 CMD ["npm", "start"]

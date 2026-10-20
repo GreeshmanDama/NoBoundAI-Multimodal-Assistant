@@ -20,6 +20,6 @@ COPY backend/services/agent ./
 COPY backend/shared /app/backend/shared
 
 # Run agent service
-EXPOSE 8001
+EXPOSE 8003
 
 CMD ["npm", "start"]

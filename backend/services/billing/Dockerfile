@@ -20,6 +20,6 @@ COPY backend/services/billing ./
 COPY backend/shared /app/backend/shared
 
 # Run billing service
-EXPOSE 8001
+EXPOSE 8004
 
 CMD ["npm", "start"]
