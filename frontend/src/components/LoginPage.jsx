@@ -106,7 +106,7 @@ function GoogleIcon({ className = "w-5 h-5" }) {
 function Brand({ compact = false }) {
   return (
     <div className="group flex cursor-pointer items-center gap-3.5">
-      <div className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-white via-zinc-300 to-zinc-600 p-[1px] shadow-lg shadow-white/[0.08] transition-all duration-300 group-hover:shadow-white/[0.16] group-hover:scale-105">
+      <div className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-white via-zinc-300 to-zinc-600 p-[1px] transition-all duration-300 group-hover:scale-105">
         <div className="flex h-full w-full items-center justify-center rounded-[15px] bg-[#0b0b0b] transition duration-300 group-hover:bg-[#171717]">
           <span className="bg-gradient-to-tr from-white via-zinc-200 to-zinc-400 bg-clip-text text-2xl font-black tracking-tighter text-transparent">
             N

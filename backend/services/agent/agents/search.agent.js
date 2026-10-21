@@ -62,7 +62,7 @@ export const searchAgent = async (state) => {
     const images = (imageData.results ?? [])
       .filter((item) => item.img_src)
       .map((item) => item.thumbnail_src || item.img_src)
-      .slice(0, 10);
+      .slice(0, 12);
 
     console.log("Web results:", searchResults);
     console.log("Image results:", images);

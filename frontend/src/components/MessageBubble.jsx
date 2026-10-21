@@ -283,15 +283,13 @@ function MessageBubble({ role, content, images = [], attachment }) {
                   text-black
                   lg:max-w-[40%]
                   max-w-[65%]
-                  shadow-[0_4px_18px_rgba(255,255,255,0.04)]
                 `
                 : `
                   rounded-bl-md
                   lg:max-w-[90%]
                   max-w-full
                   text-neutral-200
-                  shadow-[0_8px_30px_rgba(0,0,0,0.20)]
-                  backdrop-blur-xl
+                  
                 `
             }
          `}
