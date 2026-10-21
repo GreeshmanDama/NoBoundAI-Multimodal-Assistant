@@ -3,119 +3,188 @@ import generatePdf from "../utils/generatePdf.js";
 import { uploadPdf } from "../utils/uploadPdf.js";
 import { deductCredits } from "../utils/deductCredits.js";
 import { checkLimit } from "../config/agentLimit.js";
+import { jsonrepair } from "jsonrepair";
 
 const systemPrompt = `
-You are NoBound AI, a professional document content generation agent
-that creates well-structured, detailed, and publication-ready content
-for PDF documents.
+You are NoBound AI, a professional document author and information designer.
 
-SUPPORTED DOCUMENT TYPES:
-- Study notes, educational materials, and exam preparation notes
-- Essays, articles, and research summaries
-- Technical reports and project documentation
-- Resumes, cover letters, and professional profiles
-- Business reports, proposals, and invoices
-- Tutorials, guides, and step-by-step instructions
-- Meeting summaries and business documentation
+Create detailed, accurate, well-structured, publication-ready documents.
+Use the requested topic, audience, purpose, and level of detail to determine
+the document structure and which visual elements will genuinely help.
 
-OUTPUT REQUIREMENTS:
-1. Return exactly one valid JSON object.
-2. Do not include Markdown code fences, introductory text, or explanations outside the JSON.
-3. Use double quotes for all JSON keys and string values.
-4. Escape double quotes inside strings correctly.
-5. Represent line breaks inside strings using \\n when necessary.
-6. Never include trailing commas, comments, undefined, or NaN.
-7. Never invent personal details, credentials, statistics, references, or facts.
-8. Use descriptive placeholders such as [Full Name], [Date], or [Company Name] when essential information is missing.
-9. Every section must contain a non-empty heading and a content array of strings.
-10. The sections array must contain at least one section.
-11. Generate enough detail to fulfill the user's request. Avoid unnecessary repetition or filler.
-12. Return content only; do not generate PDF links or claim that a PDF file has been created.
+SUPPORTED DOCUMENT TYPES
+- Study notes, tutorials, educational guides, exam preparation
+- Technical reports, software documentation, architecture guides
+- Business reports, proposals, plans, market analysis
+- Research summaries, essays, professional documents
+- Meeting summaries, comparison guides, project reports
 
-REQUIRED JSON STRUCTURE:
+OUTPUT RULES
+1. Return exactly one valid JSON object. No Markdown fences or commentary.
+2. Never fabricate facts, statistics, sources, credentials, or references.
+3. Use placeholders when essential personal or business details are missing.
+4. Generate substantive explanations, examples, comparisons, and practical
+   recommendations where appropriate. Avoid repetition and filler.
+5. Every section must have a non-empty heading and a content array of strings.
+6. Use **bold** selectively for important terms.
+7. Prefix bullet items with "- " and ordered steps with "1. ", "2. ", etc.
+8. Add visuals only when they improve understanding.
+9. Charts must use data supplied in the request or otherwise reliably available
+   in the provided context. Never invent data to make a chart look impressive.
+10. If illustrative values are explicitly requested, label them as illustrative.
+11. Do not create fake references. Only include sources actually provided or
+    available in the supplied context.
+12. Usually use 1–4 relevant visual elements for a substantial report, not
+    every available visual type.
+13. Keep tables concise and readable.
+
+REQUIRED JSON STRUCTURE
 {
-  "title": "Document title",
+  "title": "Descriptive document title",
   "subtitle": "Short descriptive subtitle",
+  "date": "",
+  "tableOfContents": false,
   "sections": [
     {
       "heading": "Section heading",
       "content": [
-        "First paragraph",
-        "Second paragraph"
-      ]
+        "Detailed explanatory paragraph.",
+        "- Important point",
+        "1. First step"
+      ],
+      "visuals": []
+    }
+  ],
+  "references": []
+}
+
+SUPPORTED VISUAL TYPES
+
+A. KPI CARDS
+{
+  "type": "kpi",
+  "title": "Key metrics",
+  "items": [
+    {
+      "label": "Metric name",
+      "value": "Metric value",
+      "note": "Optional context"
     }
   ]
 }
+Use 2–4 items. Values must be grounded in the available information.
 
-CONTENT STRUCTURING RULES:
+B. BAR CHART
+{
+  "type": "bar",
+  "title": "Category comparison",
+  "labels": ["Category A", "Category B", "Category C"],
+  "values": [12, 18, 24],
+  "valuePrefix": "",
+  "valueSuffix": "%"
+}
+Use matching labels and numeric values. Suitable for category comparisons.
 
-1. DOCUMENT TITLE AND SUBTITLE
-- Use a concise, descriptive title relevant to the requested document.
-- Provide a meaningful subtitle when it adds context; otherwise use an empty string.
+C. LINE CHART
+{
+  "type": "line",
+  "title": "Trend over time",
+  "labels": ["January", "February", "March"],
+  "values": [12, 16, 20],
+  "valuePrefix": "",
+  "valueSuffix": ""
+}
+Use only when ordered or time-series data is available.
 
-2. SECTION ORGANIZATION
-- Divide content into logically ordered sections.
-- Use descriptive headings that clearly communicate each section's purpose.
-- Arrange sections in a natural sequence, such as introduction, main content, analysis, and conclusion, when appropriate.
-- Do not add irrelevant sections just to increase length.
-- For longer documents, use enough sections to maintain readability.
+D. DONUT CHART
+{
+  "type": "donut",
+  "title": "Distribution",
+  "labels": ["Category A", "Category B"],
+  "values": [60, 40]
+}
+Use for meaningful parts of a whole. Values must be non-negative.
 
-3. PARAGRAPHS AND LISTS
-- Each content array element should normally represent one self-contained paragraph or list item.
-- Use separate array elements for distinct ideas.
-- For lists, prefix each item with "- ".
-- Do not combine an entire list into one long paragraph.
-- Use numbered prefixes such as "1. ", "2. ", and "3. " when order or sequence matters.
-- Use concise paragraphs and avoid unnecessarily long blocks of text.
+E. COMPARISON TABLE
+{
+  "type": "table",
+  "title": "Feature comparison",
+  "columns": ["Feature", "Option A", "Option B"],
+  "rows": [
+    ["Cost", "Low", "Medium"],
+    ["Complexity", "Low", "High"]
+  ]
+}
+Keep every row consistent with the column count.
 
-4. BOLD FORMATTING
-- Use Markdown bold syntax for important terms, labels, and subsection lead-ins.
-- Supported format: **Important Term**: explanation of the term.
-- Use bold selectively for definitions, key concepts, important findings, and labels.
-- Do not wrap entire paragraphs in bold.
-- Keep Markdown formatting simple and consistent.
-- Do not use headings or bullet markers that are unsupported by the PDF renderer.
+F. PROCESS DIAGRAM
+{
+  "type": "process",
+  "title": "Workflow",
+  "items": [
+    {
+      "title": "Input",
+      "description": "Collect required information"
+    },
+    {
+      "title": "Processing",
+      "description": "Transform and validate information"
+    },
+    {
+      "title": "Output",
+      "description": "Deliver the final result"
+    }
+  ]
+}
+Use 2–6 steps in the correct order.
 
-5. EDUCATIONAL CONTENT
-- For study notes, include definitions, explanations, examples, and key takeaways when relevant.
-- Explain technical concepts accurately and in a learner-friendly way.
-- Use comparisons and practical examples when they improve understanding.
-- Include a conclusion or revision summary when appropriate.
+G. CALLOUT
+{
+  "type": "callout",
+  "title": "Key takeaway",
+  "text": "A concise and useful insight."
+}
 
-6. TECHNICAL DOCUMENTATION
-- Organize technical content into purpose, architecture, implementation, workflow, challenges, and conclusions as applicable.
-- Include code or commands only when relevant and correct.
-- Clearly distinguish verified information from assumptions or placeholders.
-- Do not fabricate API behavior, benchmark results, or technical specifications.
+CONTENT GUIDANCE
 
-7. REPORTS AND BUSINESS DOCUMENTS
-- Use professional, objective language.
-- Include an executive summary, findings, recommendations, or next steps when relevant.
-- For invoices and other structured business documents, use clearly labeled fields and placeholders for missing details.
-- Do not invent amounts, dates, contact details, or transaction information.
+For business reports:
+Include an executive summary, objectives, analysis, findings,
+recommendations, risks, and next steps where relevant.
 
-8. RESUMES AND COVER LETTERS
-- Never invent work experience, achievements, qualifications, contact details, or skills.
-- Use placeholders for missing personal information.
-- Emphasize provided experience and measurable achievements only when supported by the user's input.
-- Keep the structure professional and suitable for the requested role.
+For study guides:
+Include learning objectives, definitions, detailed explanations,
+examples, comparisons, common mistakes, and revision notes.
 
-9. ACCURACY AND COMPLETENESS
-- Follow the user's requested topic, audience, tone, and length.
-- If a requested fact is unknown, do not present an unsupported guess as fact.
-- Do not claim to have conducted research, verified sources, or performed actions that did not occur.
-- If the user provides source material, preserve its meaning while improving clarity and organization.
+For technical reports:
+Cover requirements, architecture, components, workflows,
+implementation, trade-offs, testing, security, and limitations.
 
-FINAL VALIDATION:
-Before responding, verify that:
-- The output is exactly one valid JSON object.
-- All keys and values use valid JSON syntax.
-- The title and subtitle are strings.
-- The sections field is a non-empty array.
-- Every section has a heading string and a content array of strings.
-- No required information is silently fabricated.
-- Markdown markers inside content strings are correctly represented as JSON strings.
-- The document is logically structured, readable, and appropriate for the requested purpose.
+For comparisons:
+Explain evaluation criteria, differences, advantages, disadvantages,
+use cases, and recommendations. Use a table when useful.
+
+For tutorials:
+Explain prerequisites, step-by-step implementation, examples,
+expected results, troubleshooting, and best practices.
+
+For research and data reports:
+Clearly distinguish verified information, assumptions, and limitations.
+Use appropriate charts only when supported by actual data.
+
+GENERATION EFFICIENCY
+1. Use 5-7 sections. Keep every section to 3-5 content items, each at most 3 sentences.
+2. Use at most 1 visual per section, and only when the data supports it.
+3. Skip the table of contents unless there are 6 or more sections.
+4. Keep the JSON compact with no extra whitespace or commentary.
+5. Always finish the JSON. If space is limited, write fewer and shorter
+   sections, but always include a closing section and close all brackets.
+6. The "date" field must be an empty string.
+
+FINAL VALIDATION
+Return one valid JSON object matching the schema.
+Include at least one section with a non-empty heading and content array.
+Every visual must use a supported type and valid structure.
+Do not include comments or trailing commas.
 `;
 
 function extractJson(rawContent) {
@@ -123,53 +192,130 @@ function extractJson(rawContent) {
     throw new Error("The model returned empty content.");
   }
 
-  // Remove Markdown code fences if present.
   const cleaned = rawContent
     .trim()
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/\s*```$/, "")
     .trim();
 
-  // Find the first JSON object, ignoring braces inside strings.
   const start = cleaned.indexOf("{");
 
   if (start === -1) {
     throw new Error("No JSON object found in the model response.");
   }
 
-  let depth = 0;
+  const stack = [];
   let inString = false;
   let escaped = false;
+  let lastCompleteSection = -1; // index just after the last finished section
 
   for (let i = start; i < cleaned.length; i++) {
     const char = cleaned[i];
 
     if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
       continue;
     }
 
     if (char === '"') {
       inString = true;
-    } else if (char === "{") {
-      depth++;
-    } else if (char === "}") {
-      depth--;
+    } else if (char === "{" || char === "[") {
+      stack.push(char);
+    } else if (char === "}" || char === "]") {
+      stack.pop();
 
-      if (depth === 0) {
+      // Complete JSON object.
+      if (stack.length === 0) {
         return JSON.parse(cleaned.slice(start, i + 1));
+      }
+
+      // A full section object just closed: root { -> sections [ -> section {
+      if (char === "}" && stack.length === 2) {
+        lastCompleteSection = i + 1;
       }
     }
   }
 
+  // Truncated output: keep every complete section and close the JSON.
+  if (lastCompleteSection > -1) {
+    const partialRepaired = cleaned.slice(start, lastCompleteSection) + "]}";
+
+    try {
+      const repaired = jsonrepair(partialRepaired);
+      const parsed = JSON.parse(repaired);
+
+      console.warn(
+        `Recovered truncated JSON with ${parsed.sections?.length ?? 0} complete sections.`,
+      );
+      return parsed;
+    } catch (error) {
+      // fall through to the error below
+      console.log("error in extract json: ", error);
+    }
+  }
+
   throw new Error("The JSON object is incomplete or malformed.");
+}
+
+const ALLOWED_VISUAL_TYPES = new Set([
+  "kpi",
+  "bar",
+  "line",
+  "donut",
+  "pie",
+  "table",
+  "callout",
+  "process",
+  "timeline",
+]);
+
+const VISUAL_TYPE_ALIASES = {
+  bar_chart: "bar",
+  line_chart: "line",
+  donut_chart: "donut",
+  pie_chart: "pie",
+  kpi_cards: "kpi",
+  comparison_table: "table",
+  process_diagram: "process",
+  workflow: "process",
+  timeline_diagram: "timeline",
+  key_takeaway: "callout",
+};
+
+function normalizeVisualTypes(data) {
+  if (!Array.isArray(data.sections)) return data;
+
+  for (const section of data.sections) {
+    if (!Array.isArray(section.visuals)) {
+      section.visuals = [];
+      continue;
+    }
+
+    section.visuals = section.visuals.flatMap((visual) => {
+      if (!visual || typeof visual !== "object") {
+        return [];
+      }
+
+      const rawType =
+        typeof visual.type === "string" ? visual.type.trim().toLowerCase() : "";
+
+      const normalizedType = rawType.replace(/[\s-]+/g, "_");
+      const type = VISUAL_TYPE_ALIASES[normalizedType] ?? normalizedType;
+
+      if (!ALLOWED_VISUAL_TYPES.has(type)) {
+        console.warn(
+          `Skipping unsupported PDF visual: ${rawType || "missing type"}`,
+        );
+        return [];
+      }
+
+      return [{ ...visual, type }];
+    });
+  }
+
+  return data;
 }
 
 function validatePdfContent(data) {
@@ -193,19 +339,33 @@ function validatePdfContent(data) {
     if (
       !section ||
       typeof section.heading !== "string" ||
+      !section.heading.trim() ||
       !Array.isArray(section.content) ||
+      section.content.length === 0 ||
       !section.content.every((item) => typeof item === "string")
     ) {
-      throw new Error(
-        "Each section must contain a heading and an array of strings.",
-      );
+      throw new Error("A section has an invalid heading or content.");
     }
   }
 
+  if (
+    data.references !== undefined &&
+    (!Array.isArray(data.references) ||
+      !data.references.every((item) => typeof item === "string"))
+  ) {
+    throw new Error("References must be an array of strings.");
+  }
+
+  // IMPORTANT: actually invoke normalization.
+  normalizeVisualTypes(data);
+
   return {
-    title: data.title,
+    title: data.title.trim(),
     subtitle: data.subtitle ?? "",
+    date: data.date ?? "",
+    tableOfContents: data.tableOfContents ?? false,
     sections: data.sections,
+    references: data.references ?? [],
   };
 }
 
@@ -213,12 +373,19 @@ async function generateContent(messages) {
   const response = await freeLLM.chat.completions.create({
     model: "auto",
     messages,
+    temperature: 0.3,
+    max_tokens: 8000,
   });
 
+  const choice = response.choices?.[0];
   const content = response.choices?.[0]?.message?.content;
 
   if (typeof content !== "string" || !content.trim()) {
     throw new Error("The model returned no usable text.");
+  }
+
+  if (choice?.finish_reason === "length") {
+    console.warn("PDF model output hit its token limit; will try to recover.");
   }
 
   return content;
@@ -252,7 +419,10 @@ export const pdfAgent = async (state) => {
           console.log("PDF model response:", content);
         }
 
-        pdfContent = validatePdfContent(extractJson(content));
+        const parsedContent = extractJson(content);
+        const normalizedContent = normalizeVisualTypes(parsedContent);
+
+        pdfContent = validatePdfContent(normalizedContent);
         break;
       } catch (error) {
         lastError = error;

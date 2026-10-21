@@ -6,9 +6,9 @@ import { checkLimit } from "../config/agentLimit.js";
 dotenv.config();
 
 const IMAGE_MODELS = [
-  "@cf/black-forest-labs/flux-2-dev",
   "@cf/black-forest-labs/flux-2-klein-9b",
   "@cf/black-forest-labs/flux-2-klein-4b",
+  "@cf/black-forest-labs/flux-2-dev",
   "@cf/black-forest-labs/flux-1-schnell",
   "@cf/leonardo/lucid-origin",
   "@cf/leonardo/phoenix-1.0",

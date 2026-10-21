@@ -972,7 +972,7 @@ function MessageBubble({ role, content, images = [], attachment }) {
                   shadow-[0_0_8px_rgba(52,211,153,0.6)]
                 "
               />
-              CortexAI
+              NoBound AI
             </div>
           )}
         </div>

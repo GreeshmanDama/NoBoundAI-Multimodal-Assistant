@@ -45,12 +45,16 @@ function MessageList({ selectedAgent }) {
       "Organizing content",
       "Generating the PDF",
       "Finalizing document",
+      "This may take a while",
+      "Please wait"
     ],
     ppt: [
       "Analyzing presentation topic",
       "Planning slides",
       "Generating presentation",
       "Finalizing slides",
+      "This may take a while",
+      "Please wait"
     ],
     search: [
       "Understanding search query",

@@ -112,7 +112,8 @@ ROUTING RULES:
 8. Use vision for creating images and imageAnalyzer for analyzing
    uploaded images.
 9. Do not confuse PDF generation with PDF question answering.
-10. Return exactly one agent name from this list:
+10. If user prompt contains link, respond with chat dont tell other agents names.
+11. Return exactly one agent name from this list:
     chat, search, code, pdf, pdfRag, ppt, vision, imageAnalyzer
 
 RECENT CONVERSATION:
