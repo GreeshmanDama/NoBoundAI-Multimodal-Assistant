@@ -15,22 +15,15 @@ function Home() {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const handleLogin = async (token) => {
-    try {
-      const resData = await api.post("/api/auth/login", { token });
-      dispatch(setUserData(resData.data));
-    } catch (error) {
-      console.error("Login error", error);
-    }
+    const { data } = await api.post("/api/auth/login", { token });
+    dispatch(setUserData(data));
   };
 
   const googleLogin = async () => {
-    try {
-      const data = await signInWithPopup(auth, googleProvider);
-      const token = await data.user.getIdToken();
-      await handleLogin(token);
-    } catch (error) {
-      console.error("Google login error", error);
-    }
+    const result = await signInWithPopup(auth, googleProvider);
+    const token = await result.user.getIdToken();
+
+    await handleLogin(token);
   };
 
   return (

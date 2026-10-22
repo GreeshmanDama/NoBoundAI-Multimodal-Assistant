@@ -283,6 +283,7 @@ function MessageList({ selectedAgent }) {
         /* Conversation messages */
         <div
           className="
+          mt-5
           mx-auto w-full min-w-0 max-w-4xl
           space-y-5 pb-3
           sm:space-y-6 sm:pb-4

@@ -260,7 +260,7 @@ function MessageBubble({ role, content, images = [], attachment }) {
       =================================================== */}
 
       <div
-        className={`flex w-full px-4 py-2 ${
+        className={`flex w-full px-1 ${
           isUser ? "justify-end" : "justify-start"
         }`}
       >
@@ -268,8 +268,8 @@ function MessageBubble({ role, content, images = [], attachment }) {
           className={`
             relative
             rounded-2xl
-            px-4
-            py-3
+            px-3
+            py-2
             text-[14px]
             leading-6
             transition-colors
@@ -386,7 +386,7 @@ function MessageBubble({ role, content, images = [], attachment }) {
                         className={`cursor-zoom-in object-cover transition-all duration-500 group-hover:scale-105 ${
                           isAiGenerated
                             ? "w-100 opacity-95 group-hover:opacity-100"
-                            : "lg:w-42 lg:h-30 w-20 h-15 rounded-xl group-hover:opacity-90"
+                            : "lg:w-42 lg:h-30 w-25 h-15 rounded-xl group-hover:opacity-90"
                         }`}
                       />
 

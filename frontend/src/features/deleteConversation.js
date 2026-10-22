@@ -1,9 +1,9 @@
-import axios from "axios";
+import api from "../../utils/axios"
 
 export const deleteConversation = async (id) => {
   try {
     console.log("called delete conversation")
-    const { data } = await axios.delete(
+    const { data } = await api.delete(
       `/api/chat/delete-conversation/${id}`
     );
 

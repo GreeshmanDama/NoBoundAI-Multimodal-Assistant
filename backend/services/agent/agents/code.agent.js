@@ -5,9 +5,9 @@ import { checkLimit } from "../config/agentLimit.js";
 
 const CODE_MODELS = [
   "gemini-3.7-flash",
+  "gemini-3.6-flash",
   "qwen3.8-27b",
   "dots3-note-preview",
-  "gemini-3.6-flash",
   "gemini-3.5-flash",
   "auto",
 ];

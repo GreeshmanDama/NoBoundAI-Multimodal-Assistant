@@ -63,7 +63,7 @@ const floatingItems = [
     description: "Cyberpunk neon landscape 8k",
     badge: "Rendered",
     badgeColor: "bg-white/[0.05] text-zinc-300 border-white/[0.10]",
-    url:"https://res.cloudinary.com/dbe2ekayd/image/upload/v1791697710/cortexai/generated/jwrnebuhttv20cx6n60z.jpg"
+    url: "https://res.cloudinary.com/dbe2ekayd/image/upload/v1791697710/cortexai/generated/jwrnebuhttv20cx6n60z.jpg",
   },
   {
     id: "search",
@@ -236,22 +236,86 @@ function FloatingCard({ item, index }) {
 
 export default function LoginPage({ onLogin }) {
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   const handleLogin = async (e) => {
-    if (e) e.preventDefault();
+    e?.preventDefault();
+
     if (loading) return;
 
     setLoading(true);
+    setError("");
 
-    // Preserve the existing demo login behavior.
-    setTimeout(() => {
+    try {
+      await onLogin();
+    } catch (err) {
+      console.error("Google sign-in failed:", err);
+
+      if (err?.code === "auth/popup-closed-by-user") {
+        setError("Sign-in was cancelled. Please try again.");
+      } else if (err?.code === "auth/popup-blocked") {
+        setError(
+          "Your browser blocked the sign-in popup. Allow popups and try again.",
+        );
+      } else {
+        setError(err?.message || "Unable to sign in. Please try again.");
+      }
+    } finally {
       setLoading(false);
-      if (onLogin) onLogin();
-    }, 1200);
+    }
   };
 
   return (
     <div className="relative min-h-screen w-full overflow-x-hidden bg-[#070707] font-sans antialiased text-zinc-100 selection:bg-white selection:text-black">
+      {loading && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/90 backdrop-blur-2xl">
+          {/* Subtle Background Glow */}
+          <div className="absolute h-64 w-64 rounded-full bg-white/5 blur-3xl" />
+
+          {/* Spinner & Logo Container */}
+          <div className="relative flex h-20 w-20 items-center justify-center">
+            {/* Outer Glowing Ring */}
+            <div className="absolute inset-0 animate-spin rounded-full border border-transparent border-t-white border-r-white/40 shadow-[0_0_15px_rgba(255,255,255,0.15)]" />
+
+            {/* Inner Static Ring */}
+            <div className="absolute inset-1 rounded-full border border-white/10" />
+          </div>
+
+          {/* Text Section */}
+          <div className="relative z-10 mt-8 text-center">
+            <h2 className="text-xl font-medium tracking-tight text-white">
+              Signing you in
+            </h2>
+            <p className="mt-1.5 text-xs font-light tracking-wide text-zinc-400">
+              Preparing your NoBound AI workspace...
+            </p>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div
+          role="alert"
+          aria-live="polite"
+          className="mb-4 flex items-start gap-3 rounded-xl border border-red-500/20 bg-red-500/8 px-4 py-3 text-sm text-red-300"
+        >
+          <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-red-400/50 text-xs font-bold">
+            !
+          </span>
+
+          <p className="flex-1 leading-5">{error}</p>
+
+          <button
+            type="button"
+            onClick={() => setError("")}
+            aria-label="Dismiss error"
+            className="text-red-300/70 transition hover:text-red-200"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* Background ambient lighting and gradients */}
       <div className="pointer-events-none fixed inset-0 overflow-hidden">
         {/* Monochrome ambient lighting */}
@@ -446,9 +510,7 @@ export default function LoginPage({ onLogin }) {
                         strokeWidth={1.6}
                         className="text-zinc-200"
                       />
-                      <span className="text-[11px] text-zinc-400">
-                        {label}
-                      </span>
+                      <span className="text-[11px] text-zinc-400">{label}</span>
                     </div>
                   ))}
                 </div>

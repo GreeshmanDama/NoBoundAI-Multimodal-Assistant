@@ -10,7 +10,7 @@ import {
   Presentation,
   Send,
   X,
-  Zap,
+  // Zap,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
@@ -44,7 +44,7 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
   const { inputMessage } = useSelector((state) => state.message);
 
   const agents = [
-    { id: "auto", icon: Zap, label: "Auto" },
+    // { id: "auto", icon: Zap, label: "Auto" },
     { id: "chat", icon: MessageSquare, label: "Chat" },
     { id: "code", icon: Code2, label: "Code" },
     { id: "pdf", icon: FileText, label: "PDF" },

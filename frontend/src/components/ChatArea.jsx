@@ -18,7 +18,7 @@ function ChatArea({ onOpenSidebar }) {
 
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
 
-  const [selectedAgent, setSelectedAgent] = useState("auto");
+  const [selectedAgent, setSelectedAgent] = useState("chat");
 
   useEffect(() => {
     const conversationId = selectedConversation?._id;

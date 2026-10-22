@@ -9,7 +9,6 @@ import { ProxyWithHeader } from "./utils/ProxyWithHeader.js";
 dotenv.config();
 
 const app = express();
-app.use(express.json());
 app.use(express.json({ limit: "25mb" }));
 
 app.use(
@@ -21,8 +20,13 @@ app.use(
 
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL,
+    origin: [
+      process.env.FRONTEND_URL,
+      "https://4x632ts6-5173.inc1.devtunnels.ms",
+    ].filter(Boolean),
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
 

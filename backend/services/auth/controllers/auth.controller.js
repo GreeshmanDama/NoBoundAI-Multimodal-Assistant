@@ -48,9 +48,17 @@ export const login = async (req, res) => {
     res.cookie("session", sessionId, {
       httpOnly: true,
       secure: true,
-      sameSite: "strict",
+      sameSite: "none",
+      path: "/",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
+
+    console.log("[LOGIN] Session cookie configured");
+    console.log("[LOGIN] Request origin:", req.headers.origin);
+    console.log(
+      "[LOGIN] Forwarded protocol:",
+      req.headers["x-forwarded-proto"],
+    );
 
     return res.status(200).json(user);
   } catch (error) {
@@ -62,14 +70,35 @@ export const login = async (req, res) => {
 
 export const logOut = async (req, res) => {
   try {
-    const sessionId = req.cookies?.sessionId;
-    await redis.del(`session-${sessionId}`);
+    const sessionId = req.cookies?.session;
 
-    res.clearCookie("session");
-    return res.status(200).json({ message: "logout successfully" });
+    if (sessionId) {
+      const sessionData = await redis.get(`session-${sessionId}`);
+
+      if (sessionData) {
+        const { userId } = JSON.parse(sessionData);
+
+        await redis.del(`user-session-${userId}`);
+      }
+
+      await redis.del(`session-${sessionId}`);
+    }
+
+    res.clearCookie("session", {
+      httpOnly: true,
+      secure: true,
+      sameSite: "none",
+      path: "/",
+    });
+
+    return res.status(200).json({
+      message: "Logout successful",
+    });
   } catch (error) {
+    console.error("[AUTH] Logout error:", error);
+
     return res.status(500).json({
-      message: `Logout Error ${error}`,
+      message: "Logout failed",
     });
   }
 };
@@ -189,9 +218,7 @@ export const deductCredits = async (req, res) => {
 
       return res.status(exists ? 400 : 404).json({
         success: false,
-        message: exists
-          ? "Not enough credits"
-          : "User not found",
+        message: exists ? "Not enough credits" : "User not found",
       });
     }
 

@@ -15,8 +15,8 @@ const userSlice = createSlice({
     },
 
     updateCredits: (state, action) => {
-      if (state.user) {
-        state.user.credits = action.payload;
+      if (state.userData) {
+        state.userData.credits = action.payload;
       }
     },
   },
