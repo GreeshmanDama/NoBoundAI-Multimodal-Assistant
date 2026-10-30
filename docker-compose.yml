@@ -1,0 +1,142 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - nobound
+
+  chroma:
+    image: chromadb/chroma:1.5.3
+    restart: unless-stopped
+    command: ["run", "--host", "0.0.0.0", "--port", "8000", "--path", "/data"]
+    volumes:
+      - chroma_data:/data
+    networks:
+      - nobound
+
+  freellmapi:
+    image: ghcr.io/tashfeenahmed/freellmapi:latest
+    restart: unless-stopped
+    environment:
+      PORT: "3001"
+      NODE_ENV: production
+      ENCRYPTION_KEY: ${FREELLMAPI_ENCRYPTION_KEY:?Set FREELLMAPI_ENCRYPTION_KEY in backend/.env}
+    volumes:
+      - freellmapi_data:/app/server/data
+    networks:
+      - nobound
+
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    volumes:
+      - ./backend/settings.yml:/etc/searxng/settings.yml:ro
+    networks:
+      - nobound
+
+  auth:
+    build:
+      context: .
+      dockerfile: backend/services/auth/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      PORT: "8001"
+    volumes:
+      - ./backend/services/auth/ServiceAccountKey.json:/app/backend/services/auth/ServiceAccountKey.json:ro
+    depends_on:
+      - redis
+    networks:
+      - nobound
+
+  chat:
+    build:
+      context: .
+      dockerfile: backend/services/chat/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      PORT: "8002"
+    depends_on:
+      - redis
+    networks:
+      - nobound
+
+  agent:
+    build:
+      context: .
+      dockerfile: backend/services/agent/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      PORT: "8003"
+    volumes:
+      - ./backend/.env:/app/backend/services/agent/.env:ro
+    depends_on:
+      - redis
+      - chroma
+      - freellmapi
+      - searxng
+    networks:
+      - nobound
+
+  billing:
+    build:
+      context: .
+      dockerfile: backend/services/billing/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      PORT: "8004"
+    depends_on:
+      - redis
+    networks:
+      - nobound
+
+  gateway:
+    build:
+      context: .
+      dockerfile: backend/gateway/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      PORT: "8000"
+    depends_on:
+      - auth
+      - chat
+      - agent
+      - billing
+    networks:
+      - nobound
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_FRIEBASE_API_KEY: ${VITE_FRIEBASE_API_KEY:?Set VITE_FRIEBASE_API_KEY in backend/.env}
+        VITE_RAZORPAY_KEY_ID: ${VITE_RAZORPAY_KEY_ID:?Set VITE_RAZORPAY_KEY_ID in backend/.env}
+        VITE_SERVER_URL: ${VITE_SERVER_URL:-}
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    ports:
+      - "80:80"
+    networks:
+      - nobound
+
+networks:
+  nobound:
+
+volumes:
+  redis_data:
+  chroma_data:
+  freellmapi_data:

@@ -261,7 +261,7 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
   };
 
   return (
-    <div className="w-full bg-[#080808] px-3 pb-4 pt-3 sm:px-5">
+    <div className="w-full bg-black px-3 pb-4 pt-3 sm:px-5">
       <div className="mx-auto w-full">
         {/* Agent selector */}
         <div className="mb-3 flex items-center gap-2">
@@ -314,7 +314,7 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
         )}
 
         {/* Main input container */}
-        <div className="group relative overflow-hidden rounded-2xl border border-white/10 bg-[#111111] shadow-[0_12px_45px_rgba(0,0,0,0.28)] transition-all duration-200 hover:border-white/15 focus-within:border-white/24 focus-within:shadow-[0_12px_45px_rgba(0,0,0,0.4)]">
+        <div className="group relative overflow-hidden rounded-2xl border border-white/10 bg-black shadow-[0_12px_45px_rgba(0,0,0,0.28)] transition-all duration-200 hover:border-white/15 focus-within:border-white/24 focus-within:shadow-[0_12px_45px_rgba(0,0,0,0.4)]">
           <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-linear-to-r from-transparent via-white/12 to-transparent" />
 
           <textarea

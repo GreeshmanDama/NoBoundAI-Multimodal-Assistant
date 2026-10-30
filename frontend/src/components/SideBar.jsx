@@ -17,11 +17,9 @@ import { useDispatch, useSelector } from "react-redux";
 
 import { deleteConversation } from "../features/deleteConversation";
 import { getConversation } from "../features/getConversation";
-import { createConversation } from "../features/createConversation";
 import logOut from "../features/logOut";
 
 import {
-  addConversation,
   setConversations,
   setSelectedConversation,
   clearConversations,
@@ -46,15 +44,41 @@ function SideBar({ mobileOpen = false, onMobileClose = () => {} }) {
 
   const { userData } = useSelector((state) => state.user);
 
-  // Reset avatar fallback when the user's avatar changes.
-  useEffect(() => {
-    const setImageError = () => {
-      setImgError(false);
-    };
-    setImageError;
-  }, [userData?.avatar]);
+  const userId = userData?._id || userData?.id || userData?.uid;
 
-  // Load conversation history when the user logs in.
+  useEffect(() => {
+    if (!userId) {
+      dispatch(clearConversations());
+      dispatch(setSelectedConversation(null));
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadConversations = async () => {
+      try {
+        const data = await getConversation();
+
+        if (cancelled) return;
+
+        const history = Array.isArray(data) ? data : [];
+
+        dispatch(setConversations(history));
+
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Error loading conversations:", error);
+        }
+      }
+    };
+
+    loadConversations();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [dispatch, userId]);
+
   useEffect(() => {
     if (!userData) {
       dispatch(clearConversations());
@@ -73,7 +97,6 @@ function SideBar({ mobileOpen = false, onMobileClose = () => {} }) {
 
         dispatch(setConversations(history));
 
-        // Only choose the latest conversation during initial history loading.
         dispatch(setSelectedConversation(history[0] ?? null));
       } catch (error) {
         if (!cancelled) {
@@ -89,40 +112,14 @@ function SideBar({ mobileOpen = false, onMobileClose = () => {} }) {
     };
   }, [dispatch, userData]);
 
-  // Create or select a new conversation.
-  const createConv = async () => {
-    try {
-      dispatch(setInputMessage(""));
+  const createConv = () => {
+    dispatch(setSelectedConversation(null));
 
-      // Reuse an empty conversation rather than creating duplicates.
-      const existingChat = conversations.find(
-        (conversation) => conversation.title === "New Chat",
-      );
+    dispatch(setInputMessage(""));
 
-      if (existingChat) {
-        dispatch(setSelectedConversation(existingChat));
-        onMobileClose();
-        return existingChat;
-      }
-
-      const data = await createConversation();
-
-      if (!data?._id) {
-        throw new Error("Conversation creation failed.");
-      }
-
-      dispatch(addConversation(data));
-      dispatch(setSelectedConversation(data));
-      onMobileClose();
-
-      return data;
-    } catch (error) {
-      console.error("Error creating conversation:", error);
-      return null;
-    }
+    onMobileClose();
   };
 
-  // Log out and clear user-specific conversation state.
   const handleLogout = async () => {
     try {
       await logOut();
@@ -137,7 +134,6 @@ function SideBar({ mobileOpen = false, onMobileClose = () => {} }) {
     }
   };
 
-  // Delete a conversation and select the next available conversation.
   const handleDeleteConversation = async (id) => {
     console.log("DELETE HANDLER CALLED:", id);
 
@@ -178,7 +174,6 @@ function SideBar({ mobileOpen = false, onMobileClose = () => {} }) {
 
   return (
     <>
-      {/* Mobile backdrop */}
       <button
         type="button"
         aria-label="Close sidebar"
@@ -200,7 +195,7 @@ function SideBar({ mobileOpen = false, onMobileClose = () => {} }) {
         className={`
           fixed inset-y-0 left-0 z-50
           flex h-dvh flex-col overflow-hidden
-          border-r border-white/10 bg-[#0d0f14]
+          border-r border-white/10 bg-black
       
           /* Mobile drawer: animate only the slide */
           transform-gpu
@@ -251,7 +246,6 @@ function SideBar({ mobileOpen = false, onMobileClose = () => {} }) {
             </div>
           )}
 
-          {/* Desktop collapse control */}
           <button
             type="button"
             onClick={() => setCollapsed((value) => !value)}
@@ -297,14 +291,15 @@ function SideBar({ mobileOpen = false, onMobileClose = () => {} }) {
             onClick={createConv}
             title={collapsed ? "New chat" : undefined}
             className={`
-              flex min-h-10 w-full items-center rounded-xl
-              border border-white/15 bg-white text-black
-              transition-colors hover:bg-neutral-200
-              active:scale-[0.99]
-              ${collapsed ? "justify-center px-0" : "gap-3 px-3"}
-            `}
+    flex min-h-10 w-full items-center rounded-xl
+    border border-white/15 bg-white text-black
+    transition-colors hover:bg-neutral-200
+    active:scale-[0.99]
+    ${collapsed ? "justify-center px-0" : "gap-3 px-3"}
+  `}
           >
             <Plus size={18} strokeWidth={2} />
+
             {!collapsed && (
               <span className="text-[13px] font-semibold">New chat</span>
             )}
