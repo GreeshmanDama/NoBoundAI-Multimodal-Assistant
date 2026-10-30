@@ -5,7 +5,7 @@ import {
   Plus,
   LogOut,
   MessageSquare,
-  Sparkles,
+  // Sparkles,
   User,
   Coins,
   Trash2,
@@ -64,7 +64,6 @@ function SideBar({ mobileOpen = false, onMobileClose = () => {} }) {
         const history = Array.isArray(data) ? data : [];
 
         dispatch(setConversations(history));
-
       } catch (error) {
         if (!cancelled) {
           console.error("Error loading conversations:", error);
@@ -196,6 +195,7 @@ function SideBar({ mobileOpen = false, onMobileClose = () => {} }) {
           fixed inset-y-0 left-0 z-50
           flex h-dvh flex-col overflow-hidden
           border-r border-white/10 bg-black
+          scrollbar-none
       
           /* Mobile drawer: animate only the slide */
           transform-gpu
@@ -211,6 +211,8 @@ function SideBar({ mobileOpen = false, onMobileClose = () => {} }) {
           md:ease-[cubic-bezier(0.22,1,0.36,1)]
       
           ${collapsed ? "md:w-18" : "md:w-90"}
+
+          w-80
       
           ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
           md:translate-x-0
@@ -227,12 +229,15 @@ function SideBar({ mobileOpen = false, onMobileClose = () => {} }) {
             <div className="flex min-w-0 items-center gap-3">
               <div
                 className="
-                  flex h-9 w-9 shrink-0 items-center justify-center
-                  rounded-xl border border-white/20
-                  bg-white text-black
-                "
+        flex h-9 w-9 shrink-0 items-center justify-center
+        overflow-hidden rounded-xl
+      "
               >
-                <Sparkles size={18} strokeWidth={2} />
+                <img
+                  src="/noboundglobe.svg"
+                  alt="NoBound AI Logo"
+                  className="h-9 w-9 object-contain"
+                />
               </div>
 
               <div className="min-w-0">
@@ -507,22 +512,6 @@ function SideBar({ mobileOpen = false, onMobileClose = () => {} }) {
                 </span>
               </div>
             </div>
-          )}
-
-          {collapsed && (
-            <button
-              type="button"
-              onClick={() => setShowBilling(true)}
-              title="Manage billing"
-              aria-label="Manage billing"
-              className="
-                mb-2 flex h-9 w-full items-center justify-center
-                rounded-lg text-neutral-400 transition-colors
-                hover:bg-white/[0.07] hover:text-amber-200
-              "
-            >
-              <Coins size={17} strokeWidth={1.7} />
-            </button>
           )}
 
           {/* User profile */}

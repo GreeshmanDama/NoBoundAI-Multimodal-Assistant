@@ -1,13 +1,40 @@
+# Dependencies
 node_modules/
 **/node_modules/
+
+# Environment files
 .env
 .env.*
-!.env.example
 **/.env
 **/.env.*
 !.env.example
-backend/data/
-backend/services/agent/temp/
+!**/.env.example
+
+# Build output
 dist/
+build/
+.next/
 coverage/
-backend/services/auth/ServiceAccountKey.json
+
+# Logs
+*.log
+logs/
+
+# Databases and backups
+*.db
+*.sqlite
+*.sqlite3
+*.tar
+*.tar.gz
+*.bak
+*.backup
+
+# Runtime data
+data/
+chroma_data/
+redis_data/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
