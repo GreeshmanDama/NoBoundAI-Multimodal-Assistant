@@ -5,10 +5,12 @@ node_modules/
 # Environment files
 .env
 .env.*
+backend/services/auth/ServiceAccountKey.json
 **/.env
 **/.env.*
 !.env.example
 !**/.env.example
+
 
 # Build output
 dist/
