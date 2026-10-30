@@ -264,6 +264,8 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
 
     try {
       let conversation = selectedConversation;
+      setValue("");
+      dispatch(setInputMessage(""));
 
       if (!conversation?._id) {
         conversation = await createConv();
@@ -281,8 +283,6 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
           }
         : undefined;
 
-      setValue("");
-      dispatch(setInputMessage(""));
       dispatch(setIsLoading(true));
 
       removeSelectedFile();

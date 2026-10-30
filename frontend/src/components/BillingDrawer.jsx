@@ -6,6 +6,7 @@ import { verifyPayment } from "../features/verifyPayment";
 import getCurrentUser from "../features/getCurrentUser";
 import { setUserData } from "../redux/userSlice";
 import { useState } from "react";
+import toast from "react-hot-toast";
 
 const plans = [
   {
@@ -57,18 +58,20 @@ function BillingDrawer({ open, onClose }) {
     setProcessingPlan(activePlan.name);
     setPaymentError("");
 
+    let paymentCompleted = false;
+
     try {
       const loaded = await loadRazorpay();
 
       if (!loaded) {
-        throw new Error("Unable to load Razorpay Checkout");
+        throw new Error("Unable to load Razorpay Checkout. Please try again.");
       }
 
       const plan = activePlan.name.toLowerCase();
       const data = await createOrder(plan);
 
       if (!data?.success || !data?.order?.id) {
-        throw new Error(data?.message || "Unable to create payment order");
+        throw new Error(data?.message || "Unable to create payment order.");
       }
 
       const options = {
@@ -80,6 +83,8 @@ function BillingDrawer({ open, onClose }) {
         order_id: data.order.id,
 
         handler: async (response) => {
+          const toastId = toast.loading("Verifying your payment...");
+
           try {
             const result = await verifyPayment({
               razorpay_order_id: response.razorpay_order_id,
@@ -88,21 +93,47 @@ function BillingDrawer({ open, onClose }) {
             });
 
             if (!result?.success) {
-              throw new Error(result?.message || "Payment verification failed");
+              throw new Error(
+                result?.message || "Payment verification failed.",
+              );
             }
 
+            // Refresh user data after successful verification.
             const updatedUser = await getCurrentUser();
 
+            if (!updatedUser) {
+              throw new Error(
+                "Payment verified, but account refresh failed. Please refresh your page.",
+              );
+            }
+
             dispatch(setUserData(updatedUser));
+
+            paymentCompleted = true;
+
+            toast.success(
+              `${activePlan.name} plan activated! ${activePlan.credits.toLocaleString("en-IN")} credits added.`,
+              {
+                id: toastId,
+                duration: 5000,
+              },
+            );
+
             onClose();
           } catch (error) {
             console.error("Payment verification error:", error);
 
-            setPaymentError(
+            const message =
               error.response?.data?.message ||
-                error.message ||
-                "Payment verification failed. Contact support if money was deducted.",
-            );
+              error.message ||
+              "Payment verification failed.";
+
+            setPaymentError(message);
+
+            toast.error(message, {
+              id: toastId,
+              duration: 6000,
+            });
           } finally {
             setProcessingPlan(null);
           }
@@ -111,6 +142,13 @@ function BillingDrawer({ open, onClose }) {
         modal: {
           ondismiss: () => {
             setProcessingPlan(null);
+
+            if (!paymentCompleted) {
+              toast("Payment window closed.", {
+                icon: "ℹ️",
+                duration: 3000,
+              });
+            }
           },
           escape: true,
           confirm_close: true,
@@ -126,22 +164,30 @@ function BillingDrawer({ open, onClose }) {
       razorpay.on("payment.failed", (response) => {
         console.error("Razorpay payment failed:", response.error);
 
-        setPaymentError(
-          response.error?.description || "Payment failed. Please try again.",
-        );
+        const message =
+          response.error?.description || "Payment failed. Please try again.";
+
+        setPaymentError(message);
+        toast.error(message, { duration: 5000 });
 
         setProcessingPlan(null);
       });
 
       razorpay.open();
     } catch (error) {
-      console.error("Checkout error:", error);
+      console.error("Payment initialization error:", {
+        message: error.message,
+        status: error.response?.status,
+        response: error.response?.data,
+      });
 
-      setPaymentError(
+      const message =
         error.response?.data?.message ||
-          error.message ||
-          "Unable to initiate payment",
-      );
+        error.message ||
+        "Unable to process payment. Please try again.";
+
+      setPaymentError(message);
+      toast.error(message, { duration: 5000 });
 
       setProcessingPlan(null);
     }

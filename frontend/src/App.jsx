@@ -3,6 +3,7 @@ import { useDispatch } from "react-redux";
 import Home from "./pages/Home";
 import getCurrentUser from "./features/getCurrentUser";
 import { setUserData } from "./redux/userSlice";
+import { Toaster } from "react-hot-toast";
 
 function App() {
   const dispatch = useDispatch();
@@ -62,7 +63,38 @@ function App() {
     );
   }
 
-  return <Home />;
+  return (
+    <>
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          duration: 4000,
+          style: {
+            background: "#171717",
+            color: "#fff",
+            border: "1px solid #333",
+            borderRadius: "12px",
+            fontSize: "13px",
+            padding: "14px 16px",
+          },
+          success: {
+            iconTheme: {
+              primary: "#22c55e",
+              secondary: "#fff",
+            },
+          },
+          error: {
+            iconTheme: {
+              primary: "#ef4444",
+              secondary: "#fff",
+            },
+          },
+        }}
+      />
+
+      <Home />
+    </>
+  );
 }
 
 export default App;
