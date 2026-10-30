@@ -105,54 +105,110 @@ export const logOut = async (req, res) => {
 
 export const updateUserPayment = async (req, res) => {
   try {
-    const { plan, credits, userId } = req.body;
+    const serviceKey = req.headers["x-internal-service-key"];
 
-    if (!plan || !userId || credits == null) {
+    if (
+      !process.env.INTERNAL_SERVICE_KEY ||
+      serviceKey !== process.env.INTERNAL_SERVICE_KEY
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden",
+      });
+    }
+
+    const { plan, credits, userId, paymentId } = req.body;
+
+    if (!plan || !userId || !paymentId || credits == null) {
       return res.status(400).json({
-        message: "plan, userId, and credits are required",
+        success: false,
+        message: "plan, userId, credits, and paymentId are required",
       });
     }
 
-    const user = await User.findById(userId);
+    const creditAmount = Number(credits);
 
+    if (
+      !Number.isSafeInteger(creditAmount) ||
+      creditAmount <= 0 ||
+      typeof paymentId !== "string" ||
+      paymentId.length > 100
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment or credit details",
+      });
+    }
+
+    // Atomic operation:
+    // A payment ID can only be added and credited once.
+    const user = await User.findOneAndUpdate(
+      {
+        _id: userId,
+        processedPaymentIds: { $ne: paymentId },
+      },
+      {
+        $addToSet: {
+          processedPaymentIds: paymentId,
+        },
+        $inc: {
+          credits: creditAmount,
+          totalCredits: creditAmount,
+        },
+        $set: {
+          plan,
+          planExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
+
+    // If no update occurred, determine whether this is a duplicate
+    // payment or the user does not exist.
     if (!user) {
-      return res.status(404).json({
-        message: "User not found",
+      const existingUser = await User.findById(userId);
+
+      if (!existingUser) {
+        return res.status(404).json({
+          success: false,
+          message: "User not found",
+        });
+      }
+
+      if (existingUser.processedPaymentIds?.includes(paymentId)) {
+        // Duplicate request: payment was already credited.
+        // Continue below to refresh Redis in case a previous request
+        // updated MongoDB but failed before refreshing the session.
+        await refreshUserSession(existingUser);
+
+        return res.status(200).json({
+          success: true,
+          duplicate: true,
+          message: "Payment was already processed",
+          user: {
+            plan: existingUser.plan,
+            credits: existingUser.credits,
+            totalCredits: existingUser.totalCredits,
+            planExpiresAt: existingUser.planExpiresAt,
+          },
+        });
+      }
+
+      return res.status(409).json({
+        success: false,
+        message: "Payment could not be processed",
       });
     }
 
-    user.plan = plan;
-    user.credits += Number(credits);
-    user.totalCredits += Number(credits);
-
-    user.planExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-    await user.save();
-
-    // Refresh the Redis session only if a session ID exists.
-    const sessionId = await redis.get(`user-session-${user?._id}`);
-
-    if (sessionId) {
-      await redis.set(
-        `session-${sessionId}`,
-        JSON.stringify({
-          userId: user._id,
-          name: user.name,
-          email: user.email,
-          avatar: user.avatar,
-          plan: user.plan,
-          credits: user.credits,
-          totalCredits: user.totalCredits,
-          planExpiresAt: user.planExpiresAt,
-        }),
-        "EX",
-        7 * 24 * 60 * 60,
-      );
-    }
+    await refreshUserSession(user);
 
     return res.status(200).json({
       success: true,
-      message: "Plan updated successfully",
+      duplicate: false,
+      message: "Payment processed and credits added successfully",
       user: {
         plan: user.plan,
         credits: user.credits,
@@ -161,13 +217,35 @@ export const updateUserPayment = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Error in updateUserPayment:", error);
+    console.error("[AUTH] Payment update error:", error);
 
     return res.status(500).json({
+      success: false,
       message: "Error updating user payment",
-      error: error.message,
     });
   }
+};
+
+const refreshUserSession = async (user) => {
+  const sessionId = await redis.get(`user-session-${user._id}`);
+
+  if (!sessionId) return;
+
+  await redis.set(
+    `session-${sessionId}`,
+    JSON.stringify({
+      userId: user._id,
+      name: user.name,
+      email: user.email,
+      avatar: user.avatar,
+      plan: user.plan,
+      credits: user.credits,
+      totalCredits: user.totalCredits,
+      planExpiresAt: user.planExpiresAt,
+    }),
+    "EX",
+    7 * 24 * 60 * 60,
+  );
 };
 
 export const deductCredits = async (req, res) => {

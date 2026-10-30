@@ -2,7 +2,7 @@ import { MessageSquare } from "lucide-react";
 
 function MessageLoading() {
   return (
-    <div className="flex min-h-75 flex-1 items-center justify-center bg-[#0d0f14]">
+    <div className="flex min-h-75 flex-1 items-center justify-center bg-black">
       <div className="flex flex-col items-center px-8 py-10">
         {/* Premium animated icon */}
         <div className="relative mb-7 flex h-20 w-20 items-center justify-center">

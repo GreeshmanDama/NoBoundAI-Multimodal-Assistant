@@ -5,6 +5,7 @@ import { createOrder } from "../features/createOrder";
 import { verifyPayment } from "../features/verifyPayment";
 import getCurrentUser from "../features/getCurrentUser";
 import { setUserData } from "../redux/userSlice";
+import { useState } from "react";
 
 const plans = [
   {
@@ -35,6 +36,9 @@ const plans = [
 function BillingDrawer({ open, onClose }) {
   const { userData } = useSelector((state) => state.user);
 
+  const [isPaying, setIsPaying] = useState(false);
+  const [paymentError, setPaymentError] = useState("");
+
   const dispatch = useDispatch();
 
   console.log(userData);
@@ -45,58 +49,119 @@ function BillingDrawer({ open, onClose }) {
   const usage = Math.min(100, (credits / totalCredits) * 100);
 
   const handleUpgrade = async (activePlan) => {
+    if (isPaying) return;
+
+    setIsPaying(true);
+    setPaymentError("");
+
     try {
-      const plan = activePlan?.name?.toLowerCase();
+      const loaded = await loadRazorpay();
+
+      if (!loaded) {
+        throw new Error("Unable to load Razorpay Checkout");
+      }
+
+      const plan = activePlan.name.toLowerCase();
+
+      // Create order through your existing billing API.
       const data = await createOrder(plan);
+
+      if (!data?.success || !data?.order?.id) {
+        throw new Error(data?.message || "Unable to create payment order");
+      }
+
       const options = {
         key: import.meta.env.VITE_RAZORPAY_KEY_ID,
-        amount: data?.order?.amount,
-        currency: data?.order?.currency,
+        amount: data.order.amount,
+        currency: data.order.currency,
         name: "NoBound AI",
-        description: `${data?.plan?.name} Plan`,
-        order_id: data?.order?.id,
+        description: `${data.plan.name} Plan`,
+        order_id: data.order.id,
 
         handler: async (response) => {
           try {
-            const payload = {
+            const result = await verifyPayment({
               razorpay_order_id: response.razorpay_order_id,
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_signature: response.razorpay_signature,
-            };
+            });
 
-            const verifyData = await verifyPayment(payload);
-
-            if (verifyData?.success) {
-              const updatedUser = await getCurrentUser();
-              dispatch(setUserData(updatedUser));
-
-              // Close the BillingDrawer after successful verification
-              onClose();
+            if (!result?.success) {
+              throw new Error(result?.message || "Payment verification failed");
             }
+
+            const updatedUser = await getCurrentUser();
+
+            dispatch(setUserData(updatedUser));
+            onClose();
           } catch (error) {
-            console.error("Payment verification failed:", error);
+            console.error("Payment verification error:", error);
+
+            setPaymentError(
+              error.response?.data?.message ||
+                error.message ||
+                "Payment verification failed. Contact support if money was deducted.",
+            );
+          } finally {
+            setIsPaying(false);
           }
         },
 
         modal: {
           ondismiss: () => {
-            console.log("Razorpay payment window closed");
+            setIsPaying(false);
           },
           escape: true,
           confirm_close: true,
         },
 
         theme: {
-          color: "#4F46E5",
+          color: "#FFFFFF",
         },
       };
 
       const razorpay = new window.Razorpay(options);
+
+      razorpay.on("payment.failed", (response) => {
+        console.error("Razorpay payment failed:", response.error);
+
+        setPaymentError(
+          response.error?.description || "Payment failed. Please try again.",
+        );
+
+        setIsPaying(false);
+      });
+
       razorpay.open();
     } catch (error) {
-      console.log("error in handle upgrade: ", error);
+      console.error("Checkout error:", error);
+
+      setPaymentError(
+        error.response?.data?.message ||
+          error.message ||
+          "Unable to initiate payment",
+      );
+
+      setIsPaying(false);
     }
   };
+
+  const loadRazorpay = () =>
+    new Promise((resolve) => {
+      if (window.Razorpay) {
+        resolve(true);
+        return;
+      }
+
+      const script = document.createElement("script");
+      script.src = "https://checkout.razorpay.com/v1/checkout.js";
+      script.async = true;
+
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+
+      document.body.appendChild(script);
+    });
 
   return (
     <AnimatePresence>
@@ -249,6 +314,15 @@ function BillingDrawer({ open, onClose }) {
                 </div>
               </section>
 
+              {paymentError && (
+                <div
+                  role="alert"
+                  className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-300"
+                >
+                  {paymentError}
+                </div>
+              )}
+
               {/* Plans */}
               <section>
                 <div className="mb-4">
@@ -362,26 +436,30 @@ function BillingDrawer({ open, onClose }) {
 
                         <button
                           type="button"
-                          disabled={isCurrent}
+                          disabled={isCurrent || isPaying}
                           onClick={() => handleUpgrade(plan)}
                           className={`
-                            flex w-full items-center justify-center gap-2
-                            rounded-xl px-4 py-3 text-xs font-semibold
-                            transition-all duration-200
-                            ${
-                              isCurrent
-                                ? "cursor-not-allowed border border-white/10 bg-white/4 text-neutral-500"
-                                : plan.popular
-                                  ? "bg-white text-black hover:bg-neutral-200 active:scale-[0.99]"
-                                  : "border border-white/15 bg-white/4 text-white hover:border-white/30 hover:bg-white/9 active:scale-[0.99]"
-                            }
-                          `}
+    flex w-full items-center justify-center gap-2
+    rounded-xl px-4 py-3 text-xs font-semibold
+    transition-all duration-200
+    ${
+      isCurrent || isPaying
+        ? "cursor-not-allowed border border-white/10 bg-white/4 text-neutral-500"
+        : plan.popular
+          ? "bg-white text-black hover:bg-neutral-200"
+          : "border border-white/15 bg-white/4 text-white hover:bg-white/9"
+    }
+  `}
                         >
-                          {isCurrent
-                            ? "Current Plan"
-                            : `Upgrade to ${plan.name}`}
+                          {isPaying
+                            ? "Processing..."
+                            : isCurrent
+                              ? "Current Plan"
+                              : `Upgrade to ${plan.name}`}
 
-                          {!isCurrent && <ArrowUpRight size={14} />}
+                          {!isCurrent && !isPaying && (
+                            <ArrowUpRight size={14} />
+                          )}
                         </button>
                       </motion.div>
                     );

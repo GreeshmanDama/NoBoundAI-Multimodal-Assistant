@@ -4,8 +4,9 @@ import { setInputMessage } from "../redux/messageSlice";
 import {
   ArrowUpRight,
   Code2,
-  LayoutDashboard,
+  // LayoutDashboard,
   MessageSquare,
+  Presentation,
 } from "lucide-react";
 import MessageBubble from "./MessageBubble";
 import LoadingAnimation from "./loading/MessageBubbleLoading";
@@ -123,9 +124,9 @@ function MessageList({ selectedAgent }) {
       icon: MessageSquare,
     },
     {
-      title: "Build a Dashboard",
-      description: "Design a modern analytics interface",
-      icon: LayoutDashboard,
+      title: "Create a PPT",
+      description: "Create a well structured PPT on ML",
+      icon: Presentation,
     },
   ];
 

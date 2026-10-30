@@ -37,7 +37,21 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use("/api/auth", proxy(process.env.AUTH_SERVICE));
+app.use(
+  "/api/auth",
+  (req, res, next) => {
+    if (req.path === "/update-plan") {
+      return res.status(404).json({
+        success: false,
+        message: "Not found",
+      });
+    }
+
+    next();
+  },
+  proxy(process.env.AUTH_SERVICE),
+);
+
 app.use("/api/chat", protect, ProxyWithHeader(process.env.CHAT_SERVICE));
 
 const agentJsonProxy = ProxyWithHeader(process.env.AGENT_SERVICE);
