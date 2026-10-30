@@ -36,7 +36,10 @@ const plans = [
 function BillingDrawer({ open, onClose }) {
   const { userData } = useSelector((state) => state.user);
 
-  const [isPaying, setIsPaying] = useState(false);
+  const [processingPlan, setProcessingPlan] = useState(null);
+
+  const isPaying = processingPlan !== null;
+
   const [paymentError, setPaymentError] = useState("");
 
   const dispatch = useDispatch();
@@ -51,7 +54,7 @@ function BillingDrawer({ open, onClose }) {
   const handleUpgrade = async (activePlan) => {
     if (isPaying) return;
 
-    setIsPaying(true);
+    setProcessingPlan(activePlan.name);
     setPaymentError("");
 
     try {
@@ -62,8 +65,6 @@ function BillingDrawer({ open, onClose }) {
       }
 
       const plan = activePlan.name.toLowerCase();
-
-      // Create order through your existing billing API.
       const data = await createOrder(plan);
 
       if (!data?.success || !data?.order?.id) {
@@ -103,13 +104,13 @@ function BillingDrawer({ open, onClose }) {
                 "Payment verification failed. Contact support if money was deducted.",
             );
           } finally {
-            setIsPaying(false);
+            setProcessingPlan(null);
           }
         },
 
         modal: {
           ondismiss: () => {
-            setIsPaying(false);
+            setProcessingPlan(null);
           },
           escape: true,
           confirm_close: true,
@@ -129,7 +130,7 @@ function BillingDrawer({ open, onClose }) {
           response.error?.description || "Payment failed. Please try again.",
         );
 
-        setIsPaying(false);
+        setProcessingPlan(null);
       });
 
       razorpay.open();
@@ -142,7 +143,7 @@ function BillingDrawer({ open, onClose }) {
           "Unable to initiate payment",
       );
 
-      setIsPaying(false);
+      setProcessingPlan(null);
     }
   };
 
@@ -439,19 +440,19 @@ function BillingDrawer({ open, onClose }) {
                           disabled={isCurrent || isPaying}
                           onClick={() => handleUpgrade(plan)}
                           className={`
-    flex w-full items-center justify-center gap-2
-    rounded-xl px-4 py-3 text-xs font-semibold
-    transition-all duration-200
-    ${
-      isCurrent || isPaying
-        ? "cursor-not-allowed border border-white/10 bg-white/4 text-neutral-500"
-        : plan.popular
-          ? "bg-white text-black hover:bg-neutral-200"
-          : "border border-white/15 bg-white/4 text-white hover:bg-white/9"
-    }
-  `}
+                            flex w-full items-center justify-center gap-2
+                            rounded-xl px-4 py-3 text-xs font-semibold
+                            transition-all duration-200
+                            ${
+                              isCurrent || isPaying
+                                ? "cursor-not-allowed border border-white/10 bg-white/4 text-neutral-500"
+                                : plan.popular
+                                  ? "bg-white text-black hover:bg-neutral-200"
+                                  : "border border-white/15 bg-white/4 text-white hover:bg-white/9"
+                            }
+                          `}
                         >
-                          {isPaying
+                          {processingPlan === plan.name
                             ? "Processing..."
                             : isCurrent
                               ? "Current Plan"
