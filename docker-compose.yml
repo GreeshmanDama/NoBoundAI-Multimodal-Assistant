@@ -1,3 +1,4 @@
+
 services:
   redis:
     image: redis:7-alpine
@@ -25,7 +26,7 @@ services:
       NODE_ENV: production
       ENCRYPTION_KEY: ${FREELLMAPI_ENCRYPTION_KEY:?Set FREELLMAPI_ENCRYPTION_KEY in backend/.env}
     volumes:
-      - freellmapi_data:/app/server/data
+      - freellmapi_recovery_data:/app/server/data
     networks:
       - nobound
 
@@ -128,15 +129,43 @@ services:
     restart: unless-stopped
     depends_on:
       - gateway
+    expose:
+      - "80"
+    networks:
+      - nobound
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - frontend
     ports:
       - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
     networks:
       - nobound
 
 networks:
   nobound:
+    name: cortexai_nobound
 
 volumes:
   redis_data:
   chroma_data:
-  freellmapi_data:
+
+  # Preserve the existing FreeLLMAPI database.
+  freellmapi_recovery_data:
+    external: true
+    name: freellmapi_recovery_data
+
+  # Preserve existing Caddy HTTPS certificates and configuration.
+  caddy_data:
+    name: cortexai_caddy_data
+
+  caddy_config:
+    name: cortexai_caddy_config

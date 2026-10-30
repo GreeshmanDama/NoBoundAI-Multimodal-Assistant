@@ -1,0 +1,4 @@
+nobound-ai.duckdns.org {
+    encode gzip
+    reverse_proxy frontend:80
+}
