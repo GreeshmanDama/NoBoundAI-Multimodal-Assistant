@@ -212,7 +212,7 @@ function SideBar({ mobileOpen = false, onMobileClose = () => {} }) {
       
           ${collapsed ? "md:w-18" : "md:w-90"}
 
-          w-80
+          w-[85%]
       
           ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
           md:translate-x-0
