@@ -6,11 +6,12 @@ import {
   LoaderCircle,
   MessageSquare,
   Mic,
+  MicOff,
+  AudioLines,
   Paperclip,
   Presentation,
   Send,
   X,
-  // Zap,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
@@ -29,10 +30,29 @@ import {
   setSelectedConversation,
 } from "../redux/conversationSlice";
 
+// Append `addition` to `base` with a single space between them.
+const joinText = (base, addition) => {
+  const add = addition.trim();
+  if (!add) return base;
+  const start = base.trimEnd();
+  return start ? `${start} ${add}` : add;
+};
+
 function ChatInput({ selectedAgent, setSelectedAgent }) {
   const [value, setValue] = useState("");
   const [waitResponse, setWaitResponse] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
+
+  const [isListening, setIsListening] = useState(false);
+  const [speechError, setSpeechError] = useState("");
+
+  const recognitionRef = useRef(null);
+  // What is currently shown in the textarea (committed text + live words).
+  const valueRef = useRef("");
+  // Only the finished text. Live (interim) words are never stored here, which is what prevents duplicates.
+  const committedRef = useRef("");
+  // How many final results of this session were already added to committedRef.
+  const finalCountRef = useRef(0);
 
   const fileRef = useRef(null);
   const textareaRef = useRef(null);
@@ -44,7 +64,6 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
   const { inputMessage } = useSelector((state) => state.message);
 
   const agents = [
-    // { id: "auto", icon: Zap, label: "Auto" },
     { id: "chat", icon: MessageSquare, label: "Chat" },
     { id: "code", icon: Code2, label: "Code" },
     { id: "pdf", icon: FileText, label: "PDF" },
@@ -54,17 +73,25 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
   ];
 
   const canSend =
-    (value.trim().length > 0 || Boolean(selectedFile)) && !waitResponse;
+    (value.trim().length > 0 || Boolean(selectedFile)) &&
+    !waitResponse &&
+    !isListening;
 
-  // Keep the local input in sync with suggestions and other Redux updates.
+  // Sync state with Redux input updates (suggestions, typing, paste, end of dictation).
   useEffect(() => {
-    const setVal = () => {
+    const callsetvalue = () => {
       setValue(inputMessage ?? "");
+      committedRef.current = inputMessage ?? "";
     };
-    setVal();
+    callsetvalue();
   }, [inputMessage]);
 
-  // Automatically resize the textarea, up to 240px.
+  // Keep ref updated to read state inside speech callbacks
+  useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
+
+  // Auto-resize textarea
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -75,6 +102,136 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
     textarea.style.overflowY =
       textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }, [value]);
+
+  const startSpeechRecognition = () => {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setSpeechError("Voice input isn't supported in this browser.");
+      return;
+    }
+
+    if (recognitionRef.current) {
+      const old = recognitionRef.current;
+      recognitionRef.current = null;
+      old.abort();
+    }
+
+    setSpeechError("");
+
+    // Everything already in the box is the starting point; new words are added after it.
+    committedRef.current = valueRef.current;
+    finalCountRef.current = 0;
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = navigator.language || "en-US";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      if (recognitionRef.current !== recognition) return;
+      setIsListening(true);
+    };
+
+    recognition.onresult = (event) => {
+      if (recognitionRef.current !== recognition) return;
+
+      const { results } = event;
+      let finalChunk = "";
+      let interim = "";
+
+      // 1) Take only the final results we have not committed yet (never twice).
+      let i = finalCountRef.current;
+      while (i < results.length && results[i].isFinal) {
+        finalChunk += results[i][0].transcript;
+        i++;
+      }
+      finalCountRef.current = i;
+
+      // 2) Everything after that is still being recognised (live words).
+      for (let j = i; j < results.length; j++) {
+        interim += results[j][0].transcript;
+      }
+
+      if (finalChunk.trim()) {
+        committedRef.current = joinText(committedRef.current, finalChunk);
+      }
+
+      // Show committed text + live words immediately. Live words are replaced
+      // on every event, so they can never pile up.
+      const display = joinText(committedRef.current, interim);
+
+      if (display !== valueRef.current) {
+        valueRef.current = display;
+        setValue(display);
+      }
+    };
+
+    recognition.onerror = (event) => {
+      if (recognitionRef.current !== recognition) return;
+
+      const errors = {
+        "not-allowed": "Microphone access blocked.",
+        "no-speech": "No speech detected.",
+        "audio-capture": "No microphone found.",
+        network: "Voice service network error.",
+      };
+
+      if (event.error !== "aborted") {
+        setSpeechError(errors[event.error] + " (Use Different Browser)" || "Speech recognition error, (Use Different Browser).");
+      }
+
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      if (recognitionRef.current !== recognition) return;
+      recognitionRef.current = null;
+      setIsListening(false);
+
+      // Sync Redux once when dictation ends, not on every word.
+      dispatch(setInputMessage(valueRef.current));
+    };
+
+    recognitionRef.current = recognition;
+
+    try {
+      recognition.start();
+    } catch (error) {
+      console.error("Failed to start speech recognition:", error);
+      recognitionRef.current = null;
+      setSpeechError("Could not start microphone.");
+      setIsListening(false);
+    }
+  };
+
+  const stopSpeechRecognition = () => {
+    recognitionRef.current?.stop();
+  };
+
+  // Used when the user starts typing/pasting while the mic is on.
+  // Live words are already in the box, so the session is dropped to avoid adding them twice.
+  const abortSpeechRecognition = () => {
+    const recognition = recognitionRef.current;
+    if (!recognition) return;
+    recognitionRef.current = null;
+    recognition.abort();
+    setIsListening(false);
+  };
+
+  const closeSpeechError = () => {
+    setSpeechError("");
+  };
+
+  useEffect(() => {
+    return () => {
+      const recognition = recognitionRef.current;
+      recognitionRef.current = null;
+      recognition?.abort();
+    };
+  }, []);
 
   const createConv = async () => {
     try {
@@ -88,9 +245,7 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
       }
 
       const data = await createConversation();
-      if (!data?._id) {
-        throw new Error("Conversation creation failed.");
-      }
+      if (!data?._id) throw new Error("Conversation creation failed.");
 
       dispatch(addConversation(data));
       dispatch(setSelectedConversation(data));
@@ -112,15 +267,12 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
 
       if (!conversation?._id) {
         conversation = await createConv();
-        if (!conversation?._id) {
-          throw new Error("Could not create conversation.");
-        }
+        if (!conversation?._id) throw new Error("Could not create conversation.");
       }
 
       const conversationId = conversation._id;
       const isFirstMessage = conversation.title === "New Chat";
 
-      // Clear the composer immediately and add the user's message optimistically.
       const attachment = selectedFile
         ? {
             name: selectedFile.name,
@@ -129,14 +281,12 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
           }
         : undefined;
 
-      // Clear the composer immediately.
       setValue("");
       dispatch(setInputMessage(""));
       dispatch(setIsLoading(true));
 
       removeSelectedFile();
 
-      // Add the user message with attachment metadata.
       dispatch(
         addMessage({
           role: "user",
@@ -180,7 +330,6 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
       );
 
       dispatch(setIsLoading(false));
-
       setSelectedFile(null);
       if (fileRef.current) fileRef.current.value = "";
     } catch (error) {
@@ -199,7 +348,6 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
     }
   };
 
-  // Enter sends; Shift + Enter creates a new line.
   const handleKeyDown = (event) => {
     if (
       event.key === "Enter" &&
@@ -207,16 +355,22 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
       !event.nativeEvent?.isComposing
     ) {
       event.preventDefault();
+
+      if (isListening) {
+        stopSpeechRecognition();
+        return;
+      }
+
       if (!waitResponse) handleSendMessage();
     }
   };
 
-  // Paste code/text while preserving relative indentation.
   const handlePaste = (event) => {
     const pastedText = event.clipboardData?.getData("text/plain");
     if (typeof pastedText !== "string") return;
 
     event.preventDefault();
+    abortSpeechRecognition();
 
     const normalizedText = pastedText
       .replace(/\r\n?/g, "\n")
@@ -261,11 +415,11 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
   };
 
   return (
-    <div className="w-full bg-black px-3 pb-4 pt-3 sm:px-5">
+    <div className="w-full bg-black px-3 pb-4 pt-2 sm:px-5">
       <div className="mx-auto w-full">
-        {/* Agent selector */}
-        <div className="mb-3 flex items-center gap-2">
-          <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-xl border border-white/6 bg-white/2.5 p-1 scrollbar-none">
+        {/* Agent Selector Toolbar */}
+        <div className="mb-2.5 flex items-center justify-between gap-2">
+          <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-xl border border-white/10 bg-neutral-900/60 p-1 backdrop-blur-md scrollbar-none">
             {agents.map((agent) => {
               const Icon = agent.icon;
               const isSelected = selectedAgent === agent.id;
@@ -278,13 +432,13 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
                   disabled={waitResponse}
                   title={`${agent.label} agent`}
                   aria-pressed={isSelected}
-                  className={`group inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-medium transition-all duration-200 disabled:cursor-not-allowed ${
+                  className={`group inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-all duration-200 disabled:cursor-not-allowed ${
                     isSelected
                       ? "bg-white text-black shadow-sm"
-                      : "text-neutral-500 hover:bg-white/6 hover:text-white"
+                      : "text-neutral-400 hover:bg-white/10 hover:text-white"
                   }`}
                 >
-                  <Icon size={14} strokeWidth={isSelected ? 2.2 : 1.7} />
+                  <Icon size={13} strokeWidth={isSelected ? 2.2 : 1.8} />
                   <span>{agent.label}</span>
                 </button>
               );
@@ -292,12 +446,12 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
           </div>
         </div>
 
-        {/* Selected file preview */}
+        {/* Selected File Preview */}
         {selectedFile && (
-          <div className="mb-2 flex max-w-50 items-center gap-2 rounded-xl border border-white/10 bg-[#111111] px-3 py-2 text-xs text-neutral-300">
-            <Paperclip size={14} className="shrink-0 text-neutral-400" />
+          <div className="mb-2.5 flex max-w-xs items-center gap-2 rounded-xl border border-white/10 bg-neutral-900/80 px-3 py-1.5 text-xs text-neutral-300 backdrop-blur-md">
+            <Paperclip size={13} className="shrink-0 text-neutral-400" />
             <span className="min-w-0 flex-1 truncate">{selectedFile.name}</span>
-            <span className="shrink-0 text-neutral-500">
+            <span className="shrink-0 text-[10px] text-neutral-500">
               {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
             </span>
             <button
@@ -306,22 +460,40 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
               disabled={waitResponse}
               title="Remove file"
               aria-label="Remove selected file"
-              className="rounded-md p-1 text-neutral-500 hover:bg-white/10 hover:text-white disabled:opacity-50"
+              className="rounded-md p-0.5 text-neutral-400 hover:bg-white/10 hover:text-white disabled:opacity-50"
             >
-              <X size={14} />
+              <X size={13} />
             </button>
           </div>
         )}
 
-        {/* Main input container */}
-        <div className="group relative overflow-hidden rounded-2xl border border-white/10 bg-black shadow-[0_12px_45px_rgba(0,0,0,0.28)] transition-all duration-200 hover:border-white/15 focus-within:border-white/24 focus-within:shadow-[0_12px_45px_rgba(0,0,0,0.4)]">
-          <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-linear-to-r from-transparent via-white/12 to-transparent" />
+        {/* Speech Error Banner */}
+        {speechError && (
+          <div
+            role="status"
+            className="mb-2.5 flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-950/30 px-3 py-1.5 text-xs text-red-300"
+          >
+            <MicOff size={13} className="shrink-0 text-red-400" />
+            <p className="min-w-0 flex-1 truncate">{speechError}</p>
+            <button
+              type="button"
+              onClick={closeSpeechError}
+              aria-label="Dismiss voice input message"
+              className="rounded-md p-0.5 hover:bg-white/10"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        )}
 
+        {/* Composer Main Container */}
+        <div className="group relative overflow-hidden rounded-2xl border border-white/10 bg-neutral-900/50 shadow-2xl transition-all duration-200 hover:border-white/20 focus-within:border-white/30">
           <textarea
             ref={textareaRef}
             value={value}
             onChange={(event) => {
               const newValue = event.target.value;
+              abortSpeechRecognition();
               setValue(newValue);
               dispatch(setInputMessage(newValue));
             }}
@@ -329,14 +501,18 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
             rows={1}
             disabled={waitResponse}
             onKeyDown={handleKeyDown}
-            placeholder="Message NoBound AI..."
+            placeholder={
+              isListening
+                ? "Listening... speak now"
+                : "Message NoBound AI..."
+            }
             aria-label="Message NoBound AI"
-            className="block w-full resize-none bg-transparent px-4 pb-3 pt-4 text-sm leading-6 text-white outline-none placeholder:text-neutral-600 scrollbar-none sm:px-5"
+            className="block w-full resize-none bg-transparent px-4 pb-2 pt-3.5 text-sm leading-6 text-white outline-none placeholder:text-neutral-500 scrollbar-none sm:px-5"
           />
 
-          {/* Bottom toolbar */}
-          <div className="flex items-center justify-between gap-3 px-3 pb-3 sm:px-4">
-            <div className="flex min-w-0 items-center">
+          {/* Bottom Control Bar */}
+          <div className="flex items-center justify-between gap-3 px-3 pb-2.5 pt-1 sm:px-4">
+            <div className="flex items-center gap-1">
               <input
                 type="file"
                 accept=".pdf,image/*"
@@ -346,39 +522,51 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
               />
               <button
                 type="button"
-                title="Attach PDF or image"
+                title="Attach file"
                 aria-label="Attach PDF or image"
                 disabled={waitResponse}
                 onClick={() => fileRef.current?.click()}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-neutral-500 transition-colors hover:bg-white/[0.07] hover:text-white focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/40 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Paperclip size={17} strokeWidth={1.7} />
+                <Paperclip size={16} strokeWidth={1.8} />
               </button>
 
-              {/* Voice input button is a visual placeholder; speech recognition is not wired up. */}
+              {/* Speech Button */}
               <button
                 type="button"
-                title="Voice input (not configured)"
-                aria-label="Voice input (not configured)"
-                disabled
-                className="flex h-8 w-8 shrink-0 cursor-not-allowed items-center justify-center rounded-lg text-neutral-700"
+                title={isListening ? "Stop listening" : "Start voice input"}
+                aria-label={isListening ? "Stop listening" : "Start voice input"}
+                aria-pressed={isListening}
+                disabled={waitResponse}
+                onClick={() => {
+                  if (isListening) {
+                    stopSpeechRecognition();
+                  } else {
+                    startSpeechRecognition();
+                  }
+                }}
+                className={`flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50 ${
+                  isListening
+                    ? "bg-red-500/20 text-red-400 ring-1 ring-red-500/50"
+                    : "text-neutral-400 hover:bg-white/10 hover:text-white"
+                }`}
               >
-                <Mic size={17} strokeWidth={1.7} />
+                {isListening ? (
+                  <AudioLines size={17} className="animate-pulse text-red-400" />
+                ) : (
+                  <Mic size={16} strokeWidth={1.8} />
+                )}
               </button>
 
-              <div className="mx-2 h-4 w-px shrink-0 bg-white/10" />
-              <span className="hidden truncate text-[11px] text-neutral-600 sm:inline">
-                {selectedAgent === "auto"
-                  ? "Auto mode"
-                  : `${agents.find((agent) => agent.id === selectedAgent)?.label} mode`}
+              <div className="mx-1.5 h-3.5 w-px bg-white/10" />
+              <span className="hidden text-[11px] text-neutral-500 sm:inline">
+                {agents.find((a) => a.id === selectedAgent)?.label} Mode
               </span>
             </div>
 
-            <div className="flex shrink-0 items-center gap-3">
-              <span className="hidden text-[10px] tabular-nums text-neutral-600 sm:inline">
-                {value.length > 0
-                  ? `${value.length} characters`
-                  : "Shift + Enter for new line"}
+            <div className="flex items-center gap-3">
+              <span className="hidden text-[10px] tabular-nums text-neutral-500 sm:inline">
+                {value.length > 0 ? `${value.length} chars` : "Shift + Enter for line break"}
               </span>
 
               <button
@@ -386,31 +574,26 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
                 disabled={!canSend}
                 onClick={handleSendMessage}
                 title={waitResponse ? "Generating response" : "Send message"}
-                aria-label={
-                  waitResponse ? "Generating response" : "Send message"
-                }
-                className={`flex h-9 w-9 items-center justify-center rounded-xl transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#111111] ${
+                aria-label={waitResponse ? "Generating response" : "Send message"}
+                className={`flex h-8 w-8 items-center justify-center rounded-xl transition-all duration-200 ${
                   canSend
-                    ? "bg-white text-black shadow-[0_2px_12px_rgba(255,255,255,0.08)] hover:scale-[1.04] hover:bg-neutral-200 active:scale-95"
-                    : "cursor-not-allowed border border-white/6 bg-white/4 text-neutral-600"
+                    ? "bg-white text-black hover:scale-105 active:scale-95"
+                    : "cursor-not-allowed bg-white/5 text-neutral-600"
                 }`}
               >
                 {waitResponse ? (
-                  <LoaderCircle size={17} className="animate-spin" />
+                  <LoaderCircle size={15} className="animate-spin" />
                 ) : (
-                  <Send size={16} strokeWidth={2} />
+                  <Send size={15} strokeWidth={2} />
                 )}
               </button>
             </div>
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="mt-2.5 flex items-center justify-center gap-1.5 px-2">
-          <span className="text-[10px] text-neutral-600">
-            <span className="font-medium text-neutral-400">NoBound AI</span> can
-            make mistakes. Verify important information.
-          </span>
+        {/* Footer Disclaimer */}
+        <div className="mt-2 text-center text-[10px] text-neutral-500">
+          <span className="font-medium text-neutral-400">NoBound AI</span> can make mistakes. Verify important details.
         </div>
       </div>
     </div>
