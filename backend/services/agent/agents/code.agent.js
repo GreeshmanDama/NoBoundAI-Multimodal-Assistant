@@ -1,3 +1,4 @@
+
 import { getMemory } from "../config/memory.js";
 import freeLLM from "../config/FreeLlm.js";
 import { deductCredits } from "../utils/deductCredits.js";
@@ -12,6 +13,10 @@ const CODE_MODELS = [
   "auto",
 ];
 
+// Generation configuration
+const MAX_OUTPUT_TOKENS = 8192;
+const MAX_CONTINUATIONS = 3;
+
 const systemPrompt = `
 You are NoBound AI, an expert AI coding assistant.
 
@@ -22,60 +27,50 @@ Your responsibilities:
 - Provide maintainable, secure, production-quality implementations.
 
 Conversation and context awareness:
-1. Always review the available previous conversation messages before
-   answering the current request.
-2. Determine whether the current request is related to code, an error,
-   a file, a feature, or a project discussed earlier.
-3. If related, use the relevant previous messages to understand the
-   existing implementation, project structure, technology stack,
-   variable names, functions, APIs, dependencies, and previous fixes.
-4. Continue from the previous implementation instead of unnecessarily
-   starting over or suggesting an unrelated solution.
-5. Preserve existing code conventions and architecture unless the user
-   explicitly requests a change or the existing approach is incorrect.
-6. Consider previous errors and attempted solutions so you do not
-   repeatedly suggest fixes that have already failed.
-7. If the user provides updated code, treat that code as the latest
-   version and reconcile it with relevant previous context.
-8. If the user says "this code", "that error", "continue", "fix it",
-   "update it", or similar, resolve the reference using the available
-   conversation history whenever possible.
-9. If previous messages contain relevant requirements or constraints,
-   follow them unless the user changes those requirements.
-10. Use only relevant conversation history. Do not force unrelated
-    previous topics into the current answer.
-11. If necessary context is missing, ask a concise clarifying question
-    instead of inventing project details.
-12. Never claim to remember or inspect code that is not available
-    in the current prompt or accessible conversation context.
+1. Always review available previous conversation messages.
+2. Determine whether the current request relates to previous code,
+   errors, files, features, or projects.
+3. Use relevant previous messages to understand the implementation,
+   project structure, technology stack, APIs, and previous fixes.
+4. Continue existing implementations instead of unnecessarily
+   starting over.
+5. Preserve existing architecture unless a change is necessary.
+6. Consider previous errors and failed solutions.
+7. Treat newly provided code as the latest version.
+8. Resolve references such as "this code", "that error", and
+   "continue" using available conversation history.
+9. Follow previously established requirements and constraints.
+10. Use only relevant conversation history.
+11. Ask concise questions when essential context is missing.
+12. Never claim to inspect unavailable files or code.
 
 Rules for code generation:
-1. Understand the complete request before writing code.
+1. Understand the complete request before answering.
 2. Provide complete working code when requested.
-3. Never intentionally omit required code with phrases such as
-   "rest of the code goes here".
-4. Do not stop in the middle of a function, file, or code block.
-5. Close all HTML tags, brackets, braces, and code fences.
-6. Include necessary imports and dependencies.
-7. Explain important implementation details after the code.
-8. For large implementations, organize the answer into clearly
-   labeled files or sections.
-9. If a response must be split into multiple parts, explain this clearly.
-10. Follow the requested programming language and framework.
-11. When debugging, identify the likely root cause and provide a
-    targeted fix that fits the existing implementation.
-12. Avoid rewriting entire files when a smaller, reliable change
-    is sufficient, unless the user requests the complete file.
-13. Clearly distinguish verified facts from assumptions.
-14. If you do not know something or lack sufficient information,
-    tell the user honestly rather than inventing an answer.
+3. Never intentionally omit required code.
+4. Never stop in the middle of a function or code block.
+5. Include necessary imports and dependencies.
+6. Explain important implementation details.
+7. Organize large implementations into clearly labeled files.
+8. If necessary, split large answers into multiple parts.
+9. Follow the requested programming language and framework.
+10. Identify root causes when debugging.
+11. Prefer targeted fixes unless a complete rewrite is requested.
+12. Distinguish verified facts from assumptions.
+13. Never invent technical details.
 
-Response style:
-- Be accurate, practical, and consistent with the existing project.
-- Use previous code context to avoid unnecessary questions.
-- Prefer actionable explanations and examples.
-- Do not repeat explanations the user has already received unless
-  they are needed to clarify the current solution.
+Response quality:
+- Give detailed, comprehensive, technically accurate answers.
+- Do not unnecessarily shorten explanations.
+- Include practical examples and implementation details.
+- Provide complete code rather than fragments when requested.
+- Explain important edge cases, security considerations, and errors.
+- Use clear headings and structured formatting.
+- Prioritize correctness and completeness over brevity.
+- Avoid repetitive explanations.
+
+When generating large implementations, ensure the answer
+is complete and logically organized.
 `;
 
 export const codeAgent = async (state) => {
@@ -94,22 +89,15 @@ export const codeAgent = async (state) => {
 
   // Add conversation history
   history.forEach((msg) => {
-    if (msg.role === "user") {
+    if (msg.role === "user" || msg.role === "assistant") {
       messages.push({
-        role: "user",
-        content: String(msg.content || ""),
-      });
-    }
-
-    if (msg.role === "assistant") {
-      messages.push({
-        role: "assistant",
+        role: msg.role,
         content: String(msg.content || ""),
       });
     }
   });
 
-  // Add current message
+  // Add current user message
   messages.push({
     role: "user",
     content: state.prompt,
@@ -119,37 +107,90 @@ export const codeAgent = async (state) => {
     try {
       console.log(`Trying code model: ${model}`);
 
-      const response = await freeLLM.chat.completions.create({
-        model,
-        messages,
-      });
+      let completeResponse = "";
+      let finishReason = null;
+      let continuationCount = 0;
 
-      const choice = response.choices?.[0];
-      const aiResponse = choice?.message?.content;
-      const finishReason = choice?.finish_reason;
+      let currentMessages = [...messages];
 
-      console.log("Model:", model);
-      console.log("Finish reason:", finishReason);
-      console.log("Response length:", aiResponse?.length);
-      console.log("Token usage:", response.usage);
+      while (continuationCount <= MAX_CONTINUATIONS) {
+        const response = await freeLLM.chat.completions.create({
+          model,
+          messages: currentMessages,
+          max_tokens: MAX_OUTPUT_TOKENS,
+          temperature: 0.7,
+        });
 
-      if (!aiResponse?.trim()) {
-        throw new Error(`Model ${model} returned an empty response.`);
-      }
+        const choice = response.choices?.[0];
+        const content = choice?.message?.content;
+        finishReason = choice?.finish_reason;
 
-      // A length-limited response must not be treated as complete.
-      if (finishReason === "length") {
-        console.warn(`Model ${model} reached its output token limit.`);
+        console.log("Model:", model);
+        console.log("Finish reason:", finishReason);
+        console.log("Token usage:", response.usage);
 
-        lastError = new Error(
-          `Output truncated: ${model} reached its token limit.`,
+        if (!content?.trim()) {
+          throw new Error(
+            `Model ${model} returned an empty response.`,
+          );
+        }
+
+        // Append the generated content
+        completeResponse += content;
+
+        console.log(
+          "Total response characters:",
+          completeResponse.length,
         );
 
-        // Try another model with a fresh request.
-        continue;
+        // Response completed successfully
+        if (finishReason !== "length") {
+          break;
+        }
+
+        console.warn(
+          `${model} reached its output limit. Continuing...`,
+        );
+
+        if (continuationCount >= MAX_CONTINUATIONS) {
+          console.warn("Maximum continuation attempts reached.");
+          break;
+        }
+
+        continuationCount++;
+
+        // Continue the same model from the previous response
+        currentMessages = [
+          ...currentMessages,
+          {
+            role: "assistant",
+            content,
+          },
+          {
+            role: "user",
+            content: `
+Continue your previous response exactly where it stopped.
+
+IMPORTANT:
+- Do not repeat previously generated content.
+- Do not restart the explanation.
+- Continue incomplete code, functions, and files.
+- Maintain the same formatting and structure.
+- Complete all unfinished code blocks.
+- Do not unnecessarily summarize.
+- Finish the remaining implementation.
+`,
+          },
+        ];
+      }
+
+      if (!completeResponse.trim()) {
+        throw new Error(`Model ${model} generated no usable response.`);
       }
 
       console.log(`Code model succeeded: ${model}`);
+      console.log("Final response length:", completeResponse.length);
+      console.log("Final finish reason:", finishReason);
 
       await deductCredits({
         userId: state.userId,
@@ -158,15 +199,20 @@ export const codeAgent = async (state) => {
 
       return {
         ...state,
-        aiResponse,
+        aiResponse: completeResponse,
         modelUsed: model,
         finishReason,
         isComplete: finishReason !== "length",
+        continuationCount,
       };
+
     } catch (error) {
       lastError = error;
 
-      console.error(`Code model failed: ${model}`, error.message);
+      console.error(
+        `Code model failed: ${model}`,
+        error.message,
+      );
     }
   }
 
@@ -175,9 +221,9 @@ export const codeAgent = async (state) => {
   return {
     ...state,
     aiResponse:
-      error?.data?.message ||
+      lastError?.response?.data?.error?.message ||
       lastError?.message ||
-      "Sorry, I couldn't generate a complete response. " +
-        "Please try again or shorten the request.",
+      "Sorry, I couldn't generate a response. Please try again.",
+    isComplete: false,
   };
 };
