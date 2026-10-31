@@ -5,7 +5,7 @@ import { deductCredits } from "../utils/deductCredits.js";
 import { checkLimit } from "../config/agentLimit.js";
 import { jsonrepair } from "jsonrepair";
 
-const CONTENT_SLIDE_COUNT = 10;
+const CONTENT_SLIDE_COUNT = 12;
 const MAX_ATTEMPTS = 2;
 
 const ALLOWED_LAYOUTS = new Set([
@@ -48,7 +48,7 @@ const validatePresentation = (content) => {
         Array.isArray(content?.slides)
           ? content.slides.length
           : "an invalid slides array"
-      }.`
+      }.`,
     );
   }
 
@@ -60,9 +60,7 @@ const validatePresentation = (content) => {
       !isNonEmptyString(slide.title) ||
       !ALLOWED_LAYOUTS.has(slide.layout)
     ) {
-      throw new Error(
-        `Slide ${slideNumber} has an invalid title or layout.`
-      );
+      throw new Error(`Slide ${slideNumber} has an invalid title or layout.`);
     }
 
     switch (slide.layout) {
@@ -72,7 +70,7 @@ const validatePresentation = (content) => {
           !slide.points.every(isNonEmptyString)
         ) {
           throw new Error(
-            `Slide ${slideNumber}: bullets layout requires 3–5 non-empty string points.`
+            `Slide ${slideNumber}: bullets layout requires 3–5 non-empty string points.`,
           );
         }
         break;
@@ -89,13 +87,10 @@ const validatePresentation = (content) => {
               isNonEmptyString(card.heading) &&
               isNonEmptyString(card.value) &&
               isNonEmptyString(card.description) &&
-              (card.status === undefined ||
-                typeof card.status === "string")
+              (card.status === undefined || typeof card.status === "string"),
           )
         ) {
-          throw new Error(
-            `Slide ${slideNumber}: invalid cards data.`
-          );
+          throw new Error(`Slide ${slideNumber}: invalid cards data.`);
         }
         break;
       }
@@ -105,9 +100,7 @@ const validatePresentation = (content) => {
 
         if (
           !isObject(chart) ||
-          !["bar", "line", "pie", "doughnut", "area"].includes(
-            chart.type
-          ) ||
+          !["bar", "line", "pie", "doughnut", "area"].includes(chart.type) ||
           !isStringArray(chart.categories, 2) ||
           !chart.categories.every(isNonEmptyString) ||
           !Array.isArray(chart.series) ||
@@ -119,18 +112,14 @@ const validatePresentation = (content) => {
               Array.isArray(series.values) &&
               series.values.length === chart.categories.length &&
               series.values.every(
-                (value) =>
-                  typeof value === "number" &&
-                  Number.isFinite(value)
-              )
+                (value) => typeof value === "number" && Number.isFinite(value),
+              ),
           ) ||
           (["pie", "doughnut"].includes(chart.type) &&
             (chart.series.length !== 1 ||
               chart.series[0].values.some((value) => value < 0)))
         ) {
-          throw new Error(
-            `Slide ${slideNumber}: invalid chart data.`
-          );
+          throw new Error(`Slide ${slideNumber}: invalid chart data.`);
         }
         break;
       }
@@ -151,16 +140,12 @@ const validatePresentation = (content) => {
               row.length === table.headers.length &&
               row.every(
                 (cell) =>
-                  (typeof cell === "string" &&
-                    cell.trim().length > 0) ||
-                  (typeof cell === "number" &&
-                    Number.isFinite(cell))
-              )
+                  (typeof cell === "string" && cell.trim().length > 0) ||
+                  (typeof cell === "number" && Number.isFinite(cell)),
+              ),
           )
         ) {
-          throw new Error(
-            `Slide ${slideNumber}: invalid table data.`
-          );
+          throw new Error(`Slide ${slideNumber}: invalid table data.`);
         }
         break;
       }
@@ -174,12 +159,10 @@ const validatePresentation = (content) => {
             (step) =>
               isObject(step) &&
               isNonEmptyString(step.title) &&
-              isNonEmptyString(step.description)
+              isNonEmptyString(step.description),
           )
         ) {
-          throw new Error(
-            `Slide ${slideNumber}: invalid process steps.`
-          );
+          throw new Error(`Slide ${slideNumber}: invalid process steps.`);
         }
         break;
       }
@@ -192,9 +175,7 @@ const validatePresentation = (content) => {
           side.points.every(isNonEmptyString);
 
         if (!isValidSide(slide.left) || !isValidSide(slide.right)) {
-          throw new Error(
-            `Slide ${slideNumber}: invalid comparison data.`
-          );
+          throw new Error(`Slide ${slideNumber}: invalid comparison data.`);
         }
         break;
       }
@@ -205,9 +186,7 @@ const validatePresentation = (content) => {
           (slide.attribution !== undefined &&
             typeof slide.attribution !== "string")
         ) {
-          throw new Error(
-            `Slide ${slideNumber}: invalid quote data.`
-          );
+          throw new Error(`Slide ${slideNumber}: invalid quote data.`);
         }
         break;
       }
@@ -217,21 +196,14 @@ const validatePresentation = (content) => {
           slide.subtitle !== undefined &&
           typeof slide.subtitle !== "string"
         ) {
-          throw new Error(
-            `Slide ${slideNumber}: invalid section subtitle.`
-          );
+          throw new Error(`Slide ${slideNumber}: invalid section subtitle.`);
         }
         break;
       }
     }
 
-    if (
-      slide.takeaway !== undefined &&
-      typeof slide.takeaway !== "string"
-    ) {
-      throw new Error(
-        `Slide ${slideNumber}: takeaway must be a string.`
-      );
+    if (slide.takeaway !== undefined && typeof slide.takeaway !== "string") {
+      throw new Error(`Slide ${slideNumber}: takeaway must be a string.`);
     }
   }
 
@@ -257,13 +229,9 @@ const parseModelJson = (rawResponse) => {
   const firstBrace = cleaned.indexOf("{");
   const lastBrace = cleaned.lastIndexOf("}");
 
-  if (
-    firstBrace === -1 ||
-    lastBrace === -1 ||
-    lastBrace < firstBrace
-  ) {
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
     throw new Error(
-      "The model response does not contain a complete JSON object."
+      "The model response does not contain a complete JSON object.",
     );
   }
 
@@ -274,7 +242,7 @@ const parseModelJson = (rawResponse) => {
   } catch (parseError) {
     console.warn(
       "Invalid PPT JSON. Attempting JSON repair:",
-      parseError.message
+      parseError.message,
     );
 
     try {
@@ -282,20 +250,17 @@ const parseModelJson = (rawResponse) => {
       return JSON.parse(repaired);
     } catch (repairError) {
       const position = Number(
-        parseError.message.match(/position\s+(\d+)/i)?.[1] ?? 0
+        parseError.message.match(/position\s+(\d+)/i)?.[1] ?? 0,
       );
 
       console.error("PPT JSON repair failed:", repairError.message);
       console.error(
         "Response excerpt:",
-        cleaned.slice(
-          Math.max(0, position - 150),
-          position + 150
-        )
+        cleaned.slice(Math.max(0, position - 150), position + 150),
       );
 
       throw new Error(
-        "The AI returned invalid JSON. Please retry the presentation."
+        "The AI returned invalid JSON. Please retry the presentation.",
       );
     }
   }
@@ -314,9 +279,7 @@ const extractResponseText = (response) => {
 
   if (Array.isArray(content)) {
     return content
-      .map((part) =>
-        typeof part === "string" ? part : part?.text || ""
-      )
+      .map((part) => (typeof part === "string" ? part : part?.text || ""))
       .join("")
       .trim();
   }
@@ -329,191 +292,49 @@ const extractResponseText = (response) => {
 // --------------------------------------------------
 
 const buildSystemPrompt = (topic) => `
-You are NoBound AI, an expert PowerPoint presentation designer
-and information architect.
+You are NoBound AI, an expert PowerPoint designer and information architect.
+Create a polished, accurate, informative presentation on the user's topic.
 
-Create a polished, professional, informative presentation about
-the user's requested topic.
+OUTPUT RULES
+- Return ONLY one valid JSON object: no Markdown, code fences, comments or text outside it. Use double-quoted keys and strings and no trailing commas.
+- Shape: {"title":"","subtitle":"","slides":[]}. Title and subtitle must be non-empty.
+- "slides" must hold exactly ${CONTENT_SLIDE_COUNT} content slides, all complete in this one object. The renderer adds the cover and a closing "Thank you" slide (${CONTENT_SLIDE_COUNT + 2} total), so never add title, thank-you or Q&A slides.
+- Never invent statistics, sources, quotations or attributions. Label any illustrative numbers "illustrative" in the slide title.
+- Do not add fields that are not listed for a layout.
 
-OUTPUT FORMAT:
-Return ONLY one valid JSON object.
-Do not include Markdown, code fences, comments, or explanations.
+TEXT FORMAT (slides are drawn by code, not Markdown)
+- Plain text only. No asterisks, "#", or "- ", "•", "1." prefixes: the renderer draws bullets and step numbers itself. No emoji or decorative symbols.
+- Do not wrap a quote in quotation marks; the renderer adds them.
+- Every point is a complete, informative phrase or sentence. No filler and no repeated information across slides.
+- Respect the length limits below so text fits without shrinking.
+- Every slide needs a "layout" and a non-empty "title" (max 55 characters). An optional "takeaway" (one sentence, max 100 characters) is allowed on every layout except section.
 
-REQUIRED TOP-LEVEL STRUCTURE:
-{
-  "title": "Presentation title",
-  "subtitle": "Descriptive subtitle",
-  "slides": []
-}
+LAYOUTS (use exactly these shapes)
+- bullets: {"layout":"bullets","title":"","points":[],"takeaway":""}
+  5-6 points, each 12-22 words.
+- cards: {"layout":"cards","title":"","cards":[{"heading":"","value":"","description":"","status":""}]}
+  2-4 cards. Heading max 4 words. Value max 14 characters (a key term, label or verified figure). Description max 16 words. Status is optional, max 4 words.
+- chart: {"layout":"chart","title":"","chart":{"type":"bar","categories":[],"series":[{"name":"","values":[]}],"xAxisTitle":"","yAxisTitle":"","showLegend":true},"takeaway":""}
+  Types: bar, line, pie, doughnut, area. Use 3-8 categories. Values must be JSON numbers (never "45%"), with exactly one value per category in every series. Pie and doughnut use one series with non-negative values.
+- table: {"layout":"table","title":"","table":{"headers":[],"rows":[[]]}}
+  2-5 headers and 3-7 rows. Every row must have exactly as many cells as headers. Cells are non-empty, max 10 words.
+- process: {"layout":"process","title":"","steps":[{"title":"","description":""}]}
+  3-5 ordered steps. Title max 4 words, with no "Step 1" numbering. Description max 15 words.
+- comparison: {"layout":"comparison","title":"","left":{"heading":"","points":[]},"right":{"heading":"","points":[]}}
+  3-4 balanced points per side, each max 12 words.
+- quote: {"layout":"quote","title":"","quote":"","attribution":"","takeaway":""}
+  Quote max 30 words. Use only verified quotes with attribution; otherwise write an original statement with no attribution.
+- section: {"layout":"section","title":"","subtitle":""}
+  Divider; subtitle optional, one line. Use at most one, and only if the deck has distinct parts.
 
-SLIDE COUNT:
-Return exactly ${CONTENT_SLIDE_COUNT} content slides.
-The renderer automatically adds a cover slide and closing slide,
-resulting in ${CONTENT_SLIDE_COUNT + 2} slides total.
-Do not add separate cover or closing slides to the slides array.
-
-CRITICAL COMPLETENESS RULES:
-- Generate exactly 10 content slide objects.
-- Include non-empty title and subtitle strings.
-- Every content slide must have a non-empty title.
-- Every slide must use one of the supported layouts below.
-- Complete all 10 slides in the same JSON object.
-- Do not truncate or return a partial presentation.
-- Use concise, professional, factually accurate content.
-- Do not add fields that are not specified for a layout.
-- Use valid JSON with double-quoted keys and string values.
-- Do not include trailing commas.
-- Never fabricate statistics, sources, or quotations.
-
-SUPPORTED LAYOUTS:
-
-1. bullets
-{
-  "layout": "bullets",
-  "title": "Slide title",
-  "points": ["Point 1", "Point 2", "Point 3"],
-  "takeaway": "Optional key insight"
-}
-Requirements: 3–5 non-empty string points.
-
-2. cards
-{
-  "layout": "cards",
-  "title": "Slide title",
-  "cards": [
-    {
-      "heading": "Concept",
-      "value": "Value",
-      "description": "Explanation",
-      "status": "Optional status"
-    },
-    {
-      "heading": "Another concept",
-      "value": "Value",
-      "description": "Explanation"
-    }
-  ]
-}
-Requirements: 2–4 cards. Every card requires heading, value,
-and description. Status is optional.
-
-3. chart
-{
-  "layout": "chart",
-  "title": "Chart title",
-  "chart": {
-    "type": "bar",
-    "categories": ["Category A", "Category B", "Category C"],
-    "series": [
-      {
-        "name": "Series name",
-        "values": [10, 20, 30]
-      }
-    ],
-    "xAxisTitle": "Optional X axis title",
-    "yAxisTitle": "Optional Y axis title",
-    "showLegend": true
-  },
-  "takeaway": "Explain the main insight"
-}
-Supported types: bar, line, pie, doughnut, area.
-Categories must contain at least 2 strings.
-Each series must have a name and a numeric values array
-with exactly one value per category.
-Pie and doughnut charts require exactly one series and
-non-negative values.
-Use charts only when they make sense for the topic.
-Clearly label illustrative data. Never present invented
-numbers as real-world measurements.
-
-4. table
-{
-  "layout": "table",
-  "title": "Table title",
-  "table": {
-    "headers": ["Column 1", "Column 2"],
-    "rows": [
-      ["Value 1", "Value 2"],
-      ["Value 3", "Value 4"]
-    ]
-  }
-}
-Requirements: 1–6 headers, 1–10 rows.
-Each row must contain the same number of cells as headers.
-Cells must be non-empty strings or finite numbers.
-
-5. process
-{
-  "layout": "process",
-  "title": "Process title",
-  "steps": [
-    {
-      "title": "Step 1",
-      "description": "Step description"
-    },
-    {
-      "title": "Step 2",
-      "description": "Step description"
-    },
-    {
-      "title": "Step 3",
-      "description": "Step description"
-    }
-  ]
-}
-Requirements: 3–6 steps, each with a title and description.
-
-6. comparison
-{
-  "layout": "comparison",
-  "title": "Comparison title",
-  "left": {
-    "heading": "Option A",
-    "points": ["Point 1", "Point 2"]
-  },
-  "right": {
-    "heading": "Option B",
-    "points": ["Point 1", "Point 2"]
-  }
-}
-Requirements: Each side needs a heading and 2–5 points.
-
-7. quote
-{
-  "layout": "quote",
-  "title": "Key message",
-  "quote": "A memorable statement",
-  "attribution": "Optional verified attribution",
-  "takeaway": "Optional takeaway"
-}
-Never invent a quotation or attribution.
-If no verified quotation is available, use an original statement
-without an attribution.
-
-8. section
-{
-  "layout": "section",
-  "title": "Section title",
-  "subtitle": "Optional subtitle"
-}
-Use sparingly for meaningful section dividers.
-
-CONTENT RULES:
-- Vary slide layouts appropriately.
-- Prefer educational structure: fundamentals, concepts,
-  methods, practical applications, challenges, and conclusions.
-- Avoid repeating the same information across slides.
-- Use accurate explanations and relevant examples.
-- Do not invent sources or statistics.
-- Include useful charts, tables, comparisons, and processes
-  when appropriate.
-- Before responding, verify that all 10 slides are present
-  and conform to their respective schemas.
+DECK PLAN
+- Follow a teaching arc: overview and fundamentals, key concepts, methods or process, comparison or data, practical applications, challenges, and a final conclusion slide with a takeaway.
+- Use at least 5 different layouts and no more than 3 bullets slides. Use a chart only when the topic has real or clearly labeled illustrative numbers; otherwise prefer table, process, comparison or cards.
+- Before answering, check that there are exactly ${CONTENT_SLIDE_COUNT} slides, every layout is valid, array lengths match, and the JSON is complete.
 
 USER TOPIC:
 ${topic}
 `;
-
 // --------------------------------------------------
 // PPT Agent
 // --------------------------------------------------
@@ -550,9 +371,7 @@ export const pptAgent = async (state) => {
     // Generate and validate the presentation.
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
-        console.log(
-          `Generating PPT: attempt ${attempt}/${MAX_ATTEMPTS}`
-        );
+        console.log(`Generating PPT: attempt ${attempt}/${MAX_ATTEMPTS}`);
 
         const retryMessages = [...messages];
 
@@ -612,7 +431,7 @@ Return the corrected presentation JSON only.
 
         console.log(
           `PPT validation succeeded on attempt ${attempt}.`,
-          `Content slides: ${pptContent.slides.length}`
+          `Content slides: ${pptContent.slides.length}`,
         );
 
         break;
@@ -622,7 +441,7 @@ Return the corrected presentation JSON only.
 
         console.warn(
           `PPT generation attempt ${attempt} failed:`,
-          error.message
+          error.message,
         );
       }
     }
@@ -631,7 +450,7 @@ Return the corrected presentation JSON only.
       throw new Error(
         `Could not generate a valid presentation after ${MAX_ATTEMPTS} attempts. ${
           lastError?.message || ""
-        }`
+        }`,
       );
     }
 
@@ -648,17 +467,13 @@ Return the corrected presentation JSON only.
       .replace(/\s+/g, "-")
       .slice(0, 100);
 
-    const fileName = `${
-      safeTitle || "Generated-PPT"
-    }-${Date.now()}.pptx`;
+    const fileName = `${safeTitle || "Generated-PPT"}-${Date.now()}.pptx`;
 
     // Upload the presentation.
     const result = await uploadPpt(pptBuffer, fileName);
 
     if (!result?.url) {
-      throw new Error(
-        "The presentation was generated, but uploading failed."
-      );
+      throw new Error("The presentation was generated, but uploading failed.");
     }
 
     // Deduct credits only after generation and upload succeed.
@@ -676,7 +491,7 @@ Return the corrected presentation JSON only.
       aiResponse:
         `PPT generated successfully.\n\n` +
         `[${pptContent.title}](${result.url})\n\n` +
-        `Contains ${pptContent.slides.length} content slides, ` +
+        `Contains ${CONTENT_SLIDE_COUNT + 2} content slides, ` +
         `plus the cover and closing slides.\n\n` +
         `Link expires in **${expiresInMinutes ?? "limited"} minutes**.`,
       error: null,

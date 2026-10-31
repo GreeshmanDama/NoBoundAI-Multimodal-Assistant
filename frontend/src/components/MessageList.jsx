@@ -47,7 +47,7 @@ function MessageList({ selectedAgent }) {
       "Generating the PDF",
       "Finalizing document",
       "This may take a while",
-      "Please wait"
+      "Please wait",
     ],
     ppt: [
       "Analyzing presentation topic",
@@ -55,7 +55,7 @@ function MessageList({ selectedAgent }) {
       "Generating presentation",
       "Finalizing slides",
       "This may take a while",
-      "Please wait"
+      "Please wait",
     ],
     search: [
       "Understanding search query",
@@ -86,24 +86,23 @@ function MessageList({ selectedAgent }) {
   useLayoutEffect(() => {
     if (!selectedConversation?._id) return;
 
-    if (messages.length === 0) {
+    const container = containerRef.current;
+
+    if (!container || messages.length === 0) {
       previousMessageCount.current = 0;
       return;
     }
 
-    if (previousMessageCount.current === 0) {
-      if (containerRef.current) {
-        containerRef.current.scrollTop = containerRef.current.scrollHeight;
-      }
+    const isNewMessage = messages.length > previousMessageCount.current;
 
-      previousMessageCount.current = messages.length;
-      return;
-    }
-
-    if (messages.length > previousMessageCount.current) {
+    // Initial conversation loading or a newly added message.
+    if (isNewMessage || previousMessageCount.current === 0) {
+      container.scrollTop = container.scrollHeight;
+    } else {
+      // Also follow AI streaming content updates.
       requestAnimationFrame(() => {
         bottomRef.current?.scrollIntoView({
-          behavior: "smooth",
+          behavior: "auto",
           block: "end",
         });
       });
@@ -292,18 +291,25 @@ function MessageList({ selectedAgent }) {
           xl:max-w-7xl
         "
         >
-          {messages.map((msg, i) => (
-            <div key={msg?._id || msg?.id || i} className="min-w-0 max-w-full">
-              <MessageBubble
-                role={msg?.role}
-                content={msg?.content}
-                images={msg?.images || []}
-                attachment={msg?.attachment}
-              />
-            </div>
-          ))}
+          {messages
+            .filter((msg) => !(msg.isStreaming && !msg.content))
+            .map((msg, i) => (
+              <div
+                key={msg?._id || msg?.id || i}
+                className="min-w-0 max-w-full"
+              >
+                <MessageBubble
+                  role={msg?.role}
+                  content={msg?.content}
+                  images={msg?.images || []}
+                  attachment={msg?.attachment}
+                />
+              </div>
+            ))}
 
-          {isLoading && <LoadingAnimation thinkingLabels={thinkingLabels[selectedAgent]} />}
+          {isLoading && (
+            <LoadingAnimation thinkingLabels={thinkingLabels[selectedAgent]} />
+          )}
 
           <div ref={bottomRef} className="h-px w-full" />
         </div>

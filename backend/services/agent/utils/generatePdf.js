@@ -22,6 +22,11 @@ const FONT = {
 
 const HEADING_GAP = 26; // space above each section heading
 
+// List markers the model may emit. A marker must be followed by whitespace so
+// "**Bold** text" and "3.5% growth" are never mistaken for list items.
+const BULLET_RE = /^\s*[-•*–]\s+/;
+const ORDERED_RE = /^\s*\d+[.)]\s+/;
+
 const str = (value, fallback = "") =>
   value == null ? fallback : String(value);
 
@@ -73,15 +78,16 @@ const generatePdf = async (data = {}) =>
       };
 
       const box = (
-        x, y, w, h,
+        x,
+        y,
+        w,
+        h,
         fill = C.white,
         stroke = C.border,
         radius = 8,
       ) => {
         doc.save();
-        doc
-          .roundedRect(x, y, w, h, radius)
-          .fillAndStroke(fill, stroke);
+        doc.roundedRect(x, y, w, h, radius).fillAndStroke(fill, stroke);
         doc.restore();
       };
 
@@ -96,49 +102,51 @@ const generatePdf = async (data = {}) =>
       };
 
       // Supports **bold** text inside paragraphs.
+      //
+      // PDFKit gotcha: `doc.text(str, undefined, undefined, options)` DROPS
+      // `options` (the 3rd positional arg is treated as an x/y placeholder),
+      // so `continued: true` was lost after the first segment and every
+      // segment after a bold run started on a new line. Continued segments
+      // must therefore pass the options object as the 2nd argument.
       const richText = (value, x, y, options = {}) => {
         const parts = str(value)
           .replace(/\r\n/g, "\n")
-          .split(/(\*\*[\s\S]+?\*\*)/g);
+          .split(/(\*\*[\s\S]+?\*\*)/g)
+          .filter(Boolean);
 
         const width = options.width ?? CW;
         const fontSize = options.fontSize ?? 10.5;
         const lineGap = options.lineGap ?? 3;
+        const align = options.align || "left";
 
         doc.fontSize(fontSize).fillColor(options.color || C.text);
 
-        let first = true;
-
-        for (const part of parts) {
-          if (!part) continue;
-
-          const bold =
-            part.startsWith("**") && part.endsWith("**");
-
-          const content = bold ? part.slice(2, -2) : part;
-
-          doc
-            .font(bold ? FONT.bold : FONT.regular)
-            .text(
-              content,
-              first ? x : undefined,
-              first ? y : undefined,
-              {
-                width,
-                lineGap,
-                continued: true,
-                align: options.align || "left",
-              },
-            );
-
-          first = false;
-        }
-
-        if (first) {
+        if (!parts.length) {
           doc.text("", x, y, { width });
-        } else {
-          doc.text("", { continued: false });
+          return;
         }
+
+        parts.forEach((part, i) => {
+          const bold = part.startsWith("**") && part.endsWith("**");
+
+          // Drop stray unmatched ** markers from plain text.
+          const content = bold ? part.slice(2, -2) : part.replace(/\*\*/g, "");
+
+          const segmentOptions = {
+            width,
+            lineGap,
+            align,
+            continued: i < parts.length - 1, // last segment ends the chain
+          };
+
+          doc.font(bold ? FONT.bold : FONT.regular);
+
+          if (i === 0) {
+            doc.text(content, x, y, segmentOptions);
+          } else {
+            doc.text(content, segmentOptions); // options as 2nd arg
+          }
+        });
       };
 
       const paragraphHeight = (text, options = {}) => {
@@ -160,22 +168,33 @@ const generatePdf = async (data = {}) =>
         const width = options.width ?? CW;
         const fontSize = options.fontSize ?? 10.5;
         const lineGap = options.lineGap ?? 3.5;
+        const gap = options.gap ?? 10;
 
-        const height = paragraphHeight(text, { width, fontSize, lineGap });
+        const height = paragraphHeight(text, {
+          width,
+          fontSize,
+          lineGap,
+        });
 
-        ensureSpace(height + 10);
+        ensureSpace(height + gap + 4);
 
-        const y = doc.y;
+        const startY = doc.y;
 
-        richText(text, x, y, { width, fontSize, lineGap });
+        richText(text, x, startY, {
+          width,
+          fontSize,
+          lineGap,
+        });
 
-        doc.y = y + height + (options.gap ?? 8);
+        // Account for actual rendered height as well as estimated height.
+        const actualEndY = doc.y;
+
+        doc.y = Math.max(startY + height, actualEndY) + gap;
       };
 
       const bullet = (value, index, ordered = false) => {
         const text = str(value)
-          .replace(/^\s*[-•]\s*/, "")
-          .replace(/^\s*\d+[.)]\s*/, "")
+          .replace(ordered ? ORDERED_RE : BULLET_RE, "")
           .trim();
 
         if (!text) return;
@@ -196,20 +215,16 @@ const generatePdf = async (data = {}) =>
           .font(FONT.bold)
           .fontSize(9.5)
           .fillColor(C.accent)
-          .text(
-            ordered ? `${index + 1}.` : "•",
-            MARGIN + 2,
-            y,
-            { width: markerWidth - 3 },
-          );
+          .text(ordered ? `${index + 1}.` : "•", MARGIN + 2, y, {
+            width: markerWidth - 3,
+          });
 
         richText(text, MARGIN + markerWidth, y, {
           width,
           fontSize: 10.5,
           lineGap: 3,
         });
-
-        doc.y = y + height + 7;
+        doc.y = Math.max(y + height, doc.y) + 9;
       };
 
       // keepWith = minimum space that must fit under the heading,
@@ -251,6 +266,50 @@ const generatePdf = async (data = {}) =>
         doc.moveDown(0.4);
         line(MARGIN + 14, doc.y, W - MARGIN, doc.y);
         doc.moveDown(0.7);
+      };
+
+      const markdownHeading = (value) => {
+        const match = str(value)
+          .trim()
+          .match(/^(#{1,4})\s+(.+)$/);
+
+        if (!match) return false;
+
+        const level = match[1].length;
+        const heading = match[2].trim();
+
+        const styles = {
+          1: { size: 15, top: 18, bottom: 9 },
+          2: { size: 13, top: 15, bottom: 7 },
+          3: { size: 11.5, top: 12, bottom: 6 },
+          4: { size: 10.5, top: 10, bottom: 5 },
+        };
+
+        const style = styles[level];
+
+        doc.font(FONT.bold).fontSize(style.size);
+
+        const height = doc.heightOfString(heading, {
+          width: CW,
+          lineGap: 2,
+        });
+
+        ensureSpace(height + style.top + style.bottom);
+
+        doc.y += style.top;
+
+        doc
+          .font(FONT.bold)
+          .fontSize(style.size)
+          .fillColor(level <= 2 ? C.primary : C.accent)
+          .text(heading, MARGIN + 2, doc.y, {
+            width: CW - 4,
+            lineGap: 2,
+          });
+
+        doc.y += style.bottom;
+
+        return true;
       };
 
       // Estimates how much room the first block of a section needs.
@@ -355,9 +414,7 @@ const generatePdf = async (data = {}) =>
         }
 
         const measure = (row, header = false) => {
-          doc
-            .font(header ? FONT.bold : FONT.regular)
-            .fontSize(fontSize);
+          doc.font(header ? FONT.bold : FONT.regular).fontSize(fontSize);
 
           let maxHeight = 0;
 
@@ -617,8 +674,14 @@ const generatePdf = async (data = {}) =>
         const inner = 30;
 
         const palette = [
-          C.accent, C.purple, C.green, C.orange,
-          "#0891B2", "#DB2777", "#4F46E5", "#64748B",
+          C.accent,
+          C.purple,
+          C.green,
+          C.orange,
+          "#0891B2",
+          "#DB2777",
+          "#4F46E5",
+          "#64748B",
         ];
 
         let angle = -Math.PI / 2;
@@ -635,7 +698,7 @@ const generatePdf = async (data = {}) =>
           doc
             .path(
               `M ${cx} ${cy} L ${x1} ${y1} ` +
-              `A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2} Z`,
+                `A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2} Z`,
             )
             .fill(palette[i % palette.length]);
           doc.restore();
@@ -739,12 +802,12 @@ const generatePdf = async (data = {}) =>
 
         items.forEach((item, i) => {
           const x = MARGIN + i * (cardW + gap);
-          const title = typeof item === "string"
-            ? item
-            : str(item.title || item.label, `Step ${i + 1}`);
-          const description = typeof item === "string"
-            ? ""
-            : str(item.description);
+          const title =
+            typeof item === "string"
+              ? item
+              : str(item.title || item.label, `Step ${i + 1}`);
+          const description =
+            typeof item === "string" ? "" : str(item.description);
 
           box(x, y, cardW, cardH, C.background, C.border, 7);
 
@@ -910,35 +973,54 @@ const generatePdf = async (data = {}) =>
       }
 
       // ───────────── Main content ─────────────
+
       sections.forEach((section, sectionIndex) => {
         sectionHeading(
           str(section.heading, `Section ${sectionIndex + 1}`),
           firstBlockHeight(section),
         );
 
-        const content = Array.isArray(section.content)
-          ? section.content
-          : [];
+        const content = Array.isArray(section.content) ? section.content : [];
 
-        content.forEach((item, i) => {
+        let listNumber = 0; // restarts at 1 for every numbered list
+
+        content.forEach((item) => {
           const text = str(item).trim();
+
           if (!text) return;
 
-          if (/^\s*[-•]\s+/.test(text)) {
-            bullet(text, i, false);
-          } else if (/^\s*\d+[.)]\s+/.test(text)) {
-            bullet(text, i, true);
-          } else {
-            paragraph(text, { x: MARGIN + 2, width: CW - 4 });
+          // Markdown subsection headings
+          if (markdownHeading(text)) {
+            listNumber = 0;
+            return;
           }
+
+          // Unordered lists
+          if (BULLET_RE.test(text)) {
+            listNumber = 0;
+            bullet(text, 0, false);
+            return;
+          }
+
+          // Ordered lists
+          if (ORDERED_RE.test(text)) {
+            listNumber += 1;
+            bullet(text, listNumber - 1, true);
+            return;
+          }
+
+          // Normal paragraphs
+          listNumber = 0;
+          paragraph(text, {
+            x: MARGIN + 2,
+            width: CW - 4,
+            gap: 10,
+          });
         });
 
-        const visuals = Array.isArray(section.visuals)
-          ? section.visuals
-          : [];
+        const visuals = Array.isArray(section.visuals) ? section.visuals : [];
 
         visuals.forEach(renderVisual);
-        // Spacing between sections is handled by sectionHeading's top gap.
       });
 
       if (Array.isArray(data.references) && data.references.length) {

@@ -6,8 +6,10 @@ import {
   ChevronUp,
   Download,
   FileText,
+  FileArchive,
   Presentation,
   ImageIcon,
+  LoaderCircle,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -51,6 +53,7 @@ function CodeBlock({ language, children }) {
         relative
         my-4
         overflow-hidden
+        max-w-187.5
         rounded-xl
         border border-white/10
         bg-[#0d1117]
@@ -78,7 +81,7 @@ function CodeBlock({ language, children }) {
               h-2
               w-2
               rounded-full
-              bg-indigo-400
+              bg-white
               shadow-[0_0_8px_rgba(129,140,248,0.7)]
             "
           />
@@ -139,7 +142,17 @@ function CodeBlock({ language, children }) {
 
       {/* ================= CODE ================= */}
 
-      <div className="overflow-x-auto">
+      <div
+        className="
+        max-h-[320px]
+        overflow-auto
+        overscroll-contain
+        sm:max-h-[600px]
+        scrollbar-thin
+        scrollbar-thumb-white/15
+        scrollbar-track-transparent
+      "
+      >
         <SyntaxHighlighter
           language={language || "text"}
           style={vscDarkPlus}
@@ -171,10 +184,73 @@ function CodeBlock({ language, children }) {
    MESSAGE BUBBLE
 ========================================================= */
 
-function MessageBubble({ role, content, images = [], attachment }) {
+function MessageBubble({
+  role,
+  content,
+  images = [],
+  attachment,
+  projectZip,
+  conversationId,
+  api,
+}) {
   const isUser = role === "user";
 
   const [lightBox, setLightBox] = useState(null);
+  const [zipDownloading, setZipDownloading] = useState(false);
+  const [zipError, setZipError] = useState("");
+
+  const handleProjectDownload = async () => {
+    if (!api || !conversationId || zipDownloading) {
+      if (!api) setZipError("Project download is not configured.");
+      return;
+    }
+
+    setZipDownloading(true);
+    setZipError("");
+
+    try {
+      const response = await api.get("/api/agent/workspace/export", {
+        params: { conversationId },
+        responseType: "blob",
+      });
+
+      const blob =
+        response.data instanceof Blob
+          ? response.data
+          : new Blob([response.data], { type: "application/zip" });
+
+      // Axios can also return an error payload as a Blob.
+      if (blob.type.includes("application/json")) {
+        const message = await blob.text();
+        let readable = "Project ZIP export failed.";
+        try {
+          const parsed = JSON.parse(message);
+          readable = parsed.error || parsed.message || readable;
+        } catch {
+          // Keep the fallback message.
+        }
+        throw new Error(readable);
+      }
+
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = projectZip?.name || "nobound-project.zip";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (error) {
+      console.error("Project ZIP download error:", error);
+      setZipError(
+        error?.response?.data?.message ||
+          error?.message ||
+          "Unable to download the project ZIP.",
+      );
+    } finally {
+      setZipDownloading(false);
+    }
+  };
 
   /* =======================================================
      SHOW MORE STATE
@@ -318,12 +394,16 @@ function MessageBubble({ role, content, images = [], attachment }) {
         ${
           attachment.type === "pdf"
             ? "bg-red-500/10 text-red-600"
-            : "bg-indigo-500/10 text-indigo-600"
+            : attachment.type === "zip"
+              ? "bg-amber-500/10 text-amber-700"
+              : "bg-indigo-500/10 text-indigo-600"
         }
       `}
               >
                 {attachment.type === "pdf" ? (
                   <FileText size={20} />
+                ) : attachment.type === "zip" ? (
+                  <FileArchive size={20} />
                 ) : (
                   <ImageIcon size={20} />
                 )}
@@ -338,7 +418,11 @@ function MessageBubble({ role, content, images = [], attachment }) {
                 </p>
 
                 <p className="mt-0.5 text-xs text-black/50">
-                  {attachment.type === "pdf" ? "PDF document" : "Image"}
+                  {attachment.type === "pdf"
+                    ? "PDF document"
+                    : attachment.type === "zip"
+                      ? "ZIP project archive"
+                      : "Image"}
                   {Number.isFinite(attachment.size) &&
                     attachment.size > 0 &&
                     ` · ${(attachment.size / 1024 / 1024).toFixed(2)} MB`}
@@ -902,6 +986,43 @@ function MessageBubble({ role, content, images = [], attachment }) {
               </div>
             )}
           </div>
+
+          {/* Generated project ZIP: shown at the end of code-agent replies. */}
+          {!isUser && projectZip && (
+            <div className="mt-4 rounded-xl border border-white/10 bg-white/4 p-3 sm:p-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-400/15 bg-amber-400/10 text-amber-300">
+                  <FileArchive size={20} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-white">
+                    {projectZip.name || "nobound-project.zip"}
+                  </p>
+                  <p className="mt-0.5 text-xs text-neutral-500">
+                    Project source files · ZIP archive
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleProjectDownload}
+                  disabled={zipDownloading || !api || !conversationId}
+                  className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-black transition hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {zipDownloading ? (
+                    <LoaderCircle size={14} className="animate-spin" />
+                  ) : (
+                    <Download size={14} />
+                  )}
+                  {zipDownloading ? "Preparing" : "Download ZIP"}
+                </button>
+              </div>
+              {zipError && (
+                <p role="alert" className="mt-2 text-xs text-red-300">
+                  {zipError}
+                </p>
+              )}
+            </div>
+          )}
 
           {/* =================================================
               SHOW LESS

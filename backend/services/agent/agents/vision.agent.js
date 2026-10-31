@@ -6,15 +6,15 @@ import { checkLimit } from "../config/agentLimit.js";
 dotenv.config();
 
 const IMAGE_MODELS = [
+  "@cf/black-forest-labs/flux-2-dev", 
   "@cf/black-forest-labs/flux-2-klein-9b",
   "@cf/black-forest-labs/flux-2-klein-4b",
-  "@cf/black-forest-labs/flux-2-dev",
-  "@cf/black-forest-labs/flux-1-schnell",
-  "@cf/leonardo/lucid-origin",
   "@cf/leonardo/phoenix-1.0",
+  "@cf/leonardo/lucid-origin",
   "@cf/bytedance/stable-diffusion-xl-lightning",
   "@cf/stabilityai/stable-diffusion-xl-base-1.0",
   "@cf/lykon/dreamshaper-8-lcm",
+  "@cf/black-forest-labs/flux-1-schnell",
 ];
 
 const IMAGE_SYSTEM_PROMPT = `

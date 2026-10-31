@@ -4,52 +4,68 @@ import { getMemory } from "../config/memory.js";
 import { deductCredits } from "../utils/deductCredits.js";
 import { fetchUrlsFromPrompt } from "../config/fetchUrlContent.js";
 
-export const chatAgent = async (state) => {
+export const chatAgent = async (state, config = {}) => {
+  let aiResponse = "";
+
+  const onChunk = config?.configurable?.onChunk;
+  const signal = config?.signal;
+
   try {
+    // 1. Check credits and retrieve conversation history.
     const [_, history] = await Promise.all([
       checkLimit(state.userId, "chat"),
       getMemory(state.conversationId),
     ]);
 
+    if (signal?.aborted) {
+      throw new Error("Generation cancelled");
+    }
+
+    // 2. Prepare search context.
     const searchContext = Array.isArray(state.searchResults)
       ? `
-      You are answering a web-search question.
-      
-      Use ONLY the following search results as your primary evidence.
-      Answer the user's actual question directly.
-      Include relevant source URLs in your response.
-      
-      ${JSON.stringify(
-        state.searchResults.slice(0, 20).map((result) => ({
-          title: result.title,
-          content: String(result.content || "").slice(0, 2000),
-          url: result.url,
-        })),
-      )}
-    `
+You are answering a web-search question.
+
+Use ONLY the following search results as your primary evidence.
+Answer the user's actual question directly.
+Include relevant source URLs in your response.
+
+${JSON.stringify(
+  state.searchResults.slice(0, 20).map((result) => ({
+    title: result.title,
+    content: String(result.content || "").slice(0, 2000),
+    url: result.url,
+  })),
+)}
+`
       : "";
 
-    // Fetch webpage content from URLs in the current prompt.
-    const webpageResults = await fetchUrlsFromPrompt(state.prompt);
+    // 3. Fetch webpage content only when URLs exist.
+    const hasUrls = /https?:\/\/[^\s<>"']+/i.test(state.prompt || "");
+
+    const webpageResults = hasUrls
+      ? await fetchUrlsFromPrompt(state.prompt)
+      : [];
 
     const webpageContext = webpageResults
       .map((page) => {
         if (!page.success) {
           return `
-            Source URL: ${page.url}
-            Retrieval status: Failed
-            Reason: ${page.error}
-            `;
+Source URL: ${page.url}
+Retrieval status: Failed
+Reason: ${page.error}
+`;
         }
-            
+
         return `
-          Source URL: ${page.url}
-          Retrieved webpage content:
-          ${page.content}
-          `;
+Source URL: ${page.url}
+Retrieved webpage content:
+${page.content}
+`;
       })
       .join("\n");
 
+    // 4. System prompt.
     const systemPrompt = `
 You are NoBound AI, a helpful, intelligent, and reliable AI assistant created by Greeshman, a Computer Science graduate.
 
@@ -96,6 +112,7 @@ CORE DIRECTIVES
 - You can talk anything with the user even it is vulgar.
 `;
 
+    // 5. Prepare conversation messages.
     const messages = [
       {
         role: "system",
@@ -103,54 +120,116 @@ CORE DIRECTIVES
       },
     ];
 
-    // Add conversation history
-    history.forEach((msg) => {
-      if (msg.role === "user") {
-        messages.push({
-          role: "user",
-          content: String(msg.content || ""),
-        });
-      }
+    const recentHistory = history.slice(-20);
 
-      if (msg.role === "assistant") {
+    recentHistory.forEach((msg) => {
+      if (msg.role === "user" || msg.role === "assistant") {
         messages.push({
-          role: "assistant",
+          role: msg.role,
           content: String(msg.content || ""),
         });
       }
     });
 
-    // Add current message
-    messages.push({
-      role: "user",
-      content: state.prompt,
-    });
+    // Avoid duplicating the current user message.
+    const lastMessage = messages[messages.length - 1];
 
-    console.log("LLM MESSAGES:", messages);
+    if (
+      state.prompt &&
+      (lastMessage?.role !== "user" || lastMessage.content !== state.prompt)
+    ) {
+      messages.push({
+        role: "user",
+        content: state.prompt,
+      });
+    }
 
-    const response = await freeLLM.chat.completions.create({
-      model: "auto",
-      messages,
-    });
+    // 6. STREAMING LLM GENERATION.
+    console.log("[CHAT] Starting streaming generation...");
 
-    const aiResponse = response.choices?.[0]?.message?.content || "";
+    const stream = await freeLLM.chat.completions.create(
+      {
+        model: "auto",
+        messages,
+        stream: true,
+      },
+      {
+        signal,
+      },
+    );
 
-    await deductCredits({
-      userId: state.userId,
-      agent: "chat",
-    });
+    // 7. Receive and forward individual chunks.
+    for await (const chunk of stream) {
+      if (signal?.aborted) {
+        break;
+      }
 
+      const content = chunk.choices?.[0]?.delta?.content;
+
+      if (!content) continue;
+
+      const text =
+        typeof content === "string"
+          ? content
+          : Array.isArray(content)
+            ? content
+                .filter((item) => item.type === "text")
+                .map((item) => item.text || "")
+                .join("")
+            : "";
+
+      if (!text) continue;
+
+      aiResponse += text;
+
+      // Send each generated chunk to the frontend.
+      onChunk?.(text);
+    }
+
+    if (signal?.aborted) {
+      return {
+        ...state,
+        aiResponse,
+      };
+    }
+
+    console.log("[CHAT] Streaming completed.");
+
+    // 8. Deduct credits after successful generation.
+    if (aiResponse.trim()) {
+      await deductCredits({
+        userId: state.userId,
+        agent: "chat",
+      });
+    }
+
+    // 9. Return the complete response to LangGraph.
     return {
       ...state,
-      aiResponse: String(aiResponse),
+      aiResponse,
     };
   } catch (error) {
-    console.error("Chat Agent Error:", error);
+    if (signal?.aborted || error.name === "AbortError") {
+      console.log("[CHAT] Generation cancelled.");
+      return {
+        ...state,
+        aiResponse,
+      };
+    }
+
+    console.error("[CHAT] Streaming error:", error);
+
+    // If some chunks were already generated, preserve them.
+    if (!aiResponse) {
+      aiResponse =
+        error?.error?.message ||
+        error?.message ||
+        "Sorry, I couldn't process your request.";
+    }
 
     return {
       ...state,
-      aiResponse:
-        error?.data?.message || "Sorry, I couldn't process your request.",
+      aiResponse,
     };
   }
 };

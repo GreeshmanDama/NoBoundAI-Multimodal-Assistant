@@ -10,49 +10,61 @@ import { codeAgent } from "../agents/code.agent.js";
 import { pdfRagAgent } from "../agents/pdfRag.agent.js";
 import { imageAnalyzerAgent } from "../agents/imageAnalyzer.agent.js";
 
-const workflow = new StateGraph(agentState)
+const workflow = new StateGraph(agentState);
 
-workflow.addNode("router", routerAgent)
-workflow.addNode("chat", chatAgent)
-workflow.addNode("search", searchAgent)
-workflow.addNode("pdf", pdfAgent)
-workflow.addNode("ppt", pptAgent)
-workflow.addNode("vision", visionAgent)
-workflow.addNode("code", codeAgent)
-workflow.addNode("pdfRag", pdfRagAgent)
-workflow.addNode("imageAnalyzer", imageAnalyzerAgent)
+workflow.addNode("router", routerAgent);
 
-workflow.addEdge("__start__", "router")
-workflow.addConditionalEdges("router", (state) => {
+workflow.addNode("chat", chatAgent);
+
+workflow.addNode("search", searchAgent);
+workflow.addNode("pdf", pdfAgent);
+workflow.addNode("ppt", pptAgent);
+workflow.addNode("vision", visionAgent);
+
+workflow.addNode("code", (state, config) => {
+  return codeAgent(state, {
+    onChunk: config?.configurable?.onChunk,
+    signal: config?.signal,
+  });
+});
+
+workflow.addNode("pdfRag", pdfRagAgent);
+workflow.addNode("imageAnalyzer", imageAnalyzerAgent);
+
+workflow.addEdge("__start__", "router");
+workflow.addConditionalEdges(
+  "router",
+  (state) => {
     switch (state.agent) {
-        case "chat":
-            return "chat"
+      case "chat":
+        return "chat";
 
-        case "search":
-            return "search"
+      case "search":
+        return "search";
 
-        case "pdf":
-            return "pdf"
+      case "pdf":
+        return "pdf";
 
-        case "ppt":
-            return "ppt"
+      case "ppt":
+        return "ppt";
 
-        case "vision":
-            return "vision"
-        
-        case "code":
-            return "code"
+      case "vision":
+        return "vision";
 
-        case "pdfRag":
-            return "pdfRag"
+      case "code":
+        return "code";
 
-        case "imageAnalyzer":
-            return "imageAnalyzer"
-    
-        default:
-            return "chat";
+      case "pdfRag":
+        return "pdfRag";
+
+      case "imageAnalyzer":
+        return "imageAnalyzer";
+
+      default:
+        return "chat";
     }
-}, {
+  },
+  {
     chat: "chat",
     search: "search",
     pdf: "pdf",
@@ -61,15 +73,16 @@ workflow.addConditionalEdges("router", (state) => {
     code: "code",
     pdfRag: "pdfRag",
     imageAnalyzer: "imageAnalyzer",
-})
+  },
+);
 
-workflow.addEdge("search", "chat")
-workflow.addEdge("chat", "__end__")
-workflow.addEdge("vision", "__end__")
-workflow.addEdge("pdf", "__end__")
-workflow.addEdge("ppt", "__end__")
-workflow.addEdge("code", "__end__")
-workflow.addEdge("pdfRag", "__end__")
-workflow.addEdge("imageAnalyzer", "__end__")
+workflow.addEdge("search", "chat");
+workflow.addEdge("chat", "__end__");
+workflow.addEdge("vision", "__end__");
+workflow.addEdge("pdf", "__end__");
+workflow.addEdge("ppt", "__end__");
+workflow.addEdge("code", "__end__");
+workflow.addEdge("pdfRag", "__end__");
+workflow.addEdge("imageAnalyzer", "__end__");
 
-export const graph = workflow.compile()
+export const graph = workflow.compile();

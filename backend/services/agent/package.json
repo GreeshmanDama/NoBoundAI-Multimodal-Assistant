@@ -23,6 +23,7 @@
     "@langchain/qdrant": "^1.0.3",
     "@langchain/tavily": "^1.2.0",
     "@langchain/textsplitters": "^1.0.2",
+    "archiver": "^8.0.0",
     "axios": "^1.20.0",
     "cheerio": "^1.2.0",
     "chromadb": "^3.5.0",
@@ -32,11 +33,12 @@
     "jsonrepair": "^3.15.0",
     "langchain": "^1.5.15",
     "mongoose": "^9.11.0",
-    "multer": "^2.4.0",
+    "multer": "^2.5.0",
     "nodemon": "^3.1.14",
     "openai": "^7.30.0",
     "pdf-parse": "^2.4.5",
     "pdfkit": "^0.20.2",
-    "pptxgenjs": "^4.0.1"
+    "pptxgenjs": "^4.0.1",
+    "unzipper": "^0.12.5"
   }
 }

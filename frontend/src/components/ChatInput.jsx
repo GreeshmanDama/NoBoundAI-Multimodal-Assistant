@@ -16,14 +16,22 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 
-import sendMessage from "../features/sendMessage";
+// import sendMessage from "../features/sendMessage";
 import { createConversation } from "../features/createConversation";
 import updateConversation from "../features/updateConversation";
+
 import {
   addMessage,
-  setInputMessage,
+  appendMessageChunk,
+  finishStreamingMessage,
+  updateMessageContent,
   setIsLoading,
+  setInputMessage,
+  updateMessageImages,
 } from "../redux/messageSlice";
+
+import { sendMessageStream } from "../features/sendMessageStream";
+
 import {
   addConversation,
   setCovTitle,
@@ -180,7 +188,10 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
       };
 
       if (event.error !== "aborted") {
-        setSpeechError(errors[event.error] + " (Use Different Browser)" || "Speech recognition error, (Use Different Browser).");
+        setSpeechError(
+          errors[event.error] + " (Use Different Browser)" ||
+            "Speech recognition error, (Use Different Browser).",
+        );
       }
 
       setIsListening(false);
@@ -258,18 +269,25 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
 
   const handleSendMessage = async () => {
     const prompt = value.trim();
+
     if ((!prompt && !selectedFile) || waitResponse) return;
 
     setWaitResponse(true);
 
+    let assistantMessageId = null;
+
     try {
       let conversation = selectedConversation;
+
       setValue("");
       dispatch(setInputMessage(""));
 
       if (!conversation?._id) {
         conversation = await createConv();
-        if (!conversation?._id) throw new Error("Could not create conversation.");
+
+        if (!conversation?._id) {
+          throw new Error("Could not create conversation.");
+        }
       }
 
       const conversationId = conversation._id;
@@ -283,12 +301,10 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
           }
         : undefined;
 
-      dispatch(setIsLoading(true));
-
-      removeSelectedFile();
-
+      // Add the user's message immediately.
       dispatch(
         addMessage({
+          id: crypto.randomUUID(),
           role: "user",
           content: prompt,
           attachment,
@@ -297,6 +313,7 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
 
       if (isFirstMessage && prompt) {
         const title = prompt.slice(0, 40);
+
         const updatedConversation = await updateConversation({
           id: conversationId,
           title,
@@ -307,10 +324,31 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
         }
 
         dispatch(setCovTitle({ conversationId, title }));
-        conversation = { ...conversation, ...updatedConversation, title };
+
+        conversation = {
+          ...conversation,
+          ...updatedConversation,
+          title,
+        };
       }
 
+      // Create one assistant message that will receive all chunks.
+      assistantMessageId = crypto.randomUUID();
+
+      dispatch(
+        addMessage({
+          id: assistantMessageId,
+          role: "assistant",
+          content: "",
+          images: [],
+          isStreaming: true,
+        }),
+      );
+
+      dispatch(setIsLoading(true));
+
       const formData = new FormData();
+
       formData.append("prompt", prompt);
       formData.append("conversationId", conversationId);
       formData.append("agent", selectedAgent.toLowerCase());
@@ -319,31 +357,78 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
         formData.append("file", selectedFile);
       }
 
-      const data = await sendMessage(formData);
+      // Remove the selected attachment after adding it to FormData.
+      removeSelectedFile();
 
-      dispatch(
-        addMessage({
-          role: "assistant",
-          content: data?.answer ?? "No response received.",
-          images: data?.images ?? [],
-        }),
-      );
+      await sendMessageStream(formData, {
+        // Append every generated chunk to the same message.
+        onChunk: (chunk) => {
+          dispatch(
+            appendMessageChunk({
+              id: assistantMessageId,
+              text: chunk,
+            }),
+          );
 
-      dispatch(setIsLoading(false));
+          // Hide the initial loading animation once text arrives.
+          dispatch(setIsLoading(false));
+        },
+
+        // Final answer and generated images.
+        onDone: (data) => {
+          if (typeof data.answer === "string") {
+            dispatch(
+              updateMessageContent({
+                id: assistantMessageId,
+                content: data.answer,
+              }),
+            );
+          }
+
+          dispatch(
+            updateMessageImages({
+              id: assistantMessageId,
+              images: data.images || [],
+            }),
+          );
+
+          dispatch(finishStreamingMessage(assistantMessageId));
+          dispatch(setIsLoading(false));
+        },
+      });
+
       setSelectedFile(null);
-      if (fileRef.current) fileRef.current.value = "";
+
+      if (fileRef.current) {
+        fileRef.current.value = "";
+      }
     } catch (error) {
       console.error("Failed to send message:", error);
-      dispatch(
-        addMessage({
-          role: "assistant",
-          content:
-            error?.response?.data?.message ||
-            error?.message ||
-            "Sorry, something went wrong while sending your message.",
-        }),
-      );
+
+      const errorMessage =
+        error?.message ||
+        "Sorry, something went wrong while sending your message.";
+
+      if (assistantMessageId) {
+        dispatch(
+          updateMessageContent({
+            id: assistantMessageId,
+            content: errorMessage,
+          }),
+        );
+
+        dispatch(finishStreamingMessage(assistantMessageId));
+      } else {
+        dispatch(
+          addMessage({
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: errorMessage,
+          }),
+        );
+      }
     } finally {
+      dispatch(setIsLoading(false));
       setWaitResponse(false);
     }
   };
@@ -502,9 +587,7 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
             disabled={waitResponse}
             onKeyDown={handleKeyDown}
             placeholder={
-              isListening
-                ? "Listening... speak now"
-                : "Message NoBound AI..."
+              isListening ? "Listening... speak now" : "Message NoBound AI..."
             }
             aria-label="Message NoBound AI"
             className="block w-full resize-none bg-transparent px-4 pb-2 pt-3.5 text-sm leading-6 text-white outline-none placeholder:text-neutral-500 scrollbar-none sm:px-5"
@@ -535,7 +618,9 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
               <button
                 type="button"
                 title={isListening ? "Stop listening" : "Start voice input"}
-                aria-label={isListening ? "Stop listening" : "Start voice input"}
+                aria-label={
+                  isListening ? "Stop listening" : "Start voice input"
+                }
                 aria-pressed={isListening}
                 disabled={waitResponse}
                 onClick={() => {
@@ -552,7 +637,10 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
                 }`}
               >
                 {isListening ? (
-                  <AudioLines size={17} className="animate-pulse text-red-400" />
+                  <AudioLines
+                    size={17}
+                    className="animate-pulse text-red-400"
+                  />
                 ) : (
                   <Mic size={16} strokeWidth={1.8} />
                 )}
@@ -566,7 +654,9 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
 
             <div className="flex items-center gap-3">
               <span className="hidden text-[10px] tabular-nums text-neutral-500 sm:inline">
-                {value.length > 0 ? `${value.length} chars` : "Shift + Enter for line break"}
+                {value.length > 0
+                  ? `${value.length} chars`
+                  : "Shift + Enter for line break"}
               </span>
 
               <button
@@ -574,7 +664,9 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
                 disabled={!canSend}
                 onClick={handleSendMessage}
                 title={waitResponse ? "Generating response" : "Send message"}
-                aria-label={waitResponse ? "Generating response" : "Send message"}
+                aria-label={
+                  waitResponse ? "Generating response" : "Send message"
+                }
                 className={`flex h-8 w-8 items-center justify-center rounded-xl transition-all duration-200 ${
                   canSend
                     ? "bg-white text-black hover:scale-105 active:scale-95"
@@ -593,7 +685,8 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
 
         {/* Footer Disclaimer */}
         <div className="mt-2 text-center text-[10px] text-neutral-500">
-          <span className="font-medium text-neutral-400">NoBound AI</span> can make mistakes. Verify important details.
+          <span className="font-medium text-neutral-400">NoBound AI</span> can
+          make mistakes. Verify important details.
         </div>
       </div>
     </div>
