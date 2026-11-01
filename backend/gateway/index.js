@@ -6,6 +6,7 @@ import cookieParser from "cookie-parser";
 import protect from "./middleware/auth.middleware.js";
 import { getCurrentUser } from "./controllers/user.controller.js";
 import { ProxyWithHeader } from "./utils/ProxyWithHeader.js";
+import { StreamProxy } from "./utils/streamProxy.js";
 dotenv.config();
 
 const app = express();
@@ -70,19 +71,7 @@ app.use(
 
 app.use("/api/chat", protect, ProxyWithHeader(process.env.CHAT_SERVICE));
 
-const agentJsonProxy = ProxyWithHeader(process.env.AGENT_SERVICE);
-
-const agentFileProxy = ProxyWithHeader(process.env.AGENT_SERVICE, {
-  parseReqBody: false,
-});
-
-app.use("/api/agent", protect, (req, res, next) => {
-  if (req.is("multipart/form-data")) {
-    return agentFileProxy(req, res, next);
-  }
-
-  return agentJsonProxy(req, res, next);
-});
+app.use("/api/agent", protect, StreamProxy(process.env.AGENT_SERVICE));
 
 app.use("/api/billing", protect, ProxyWithHeader(process.env.BILLING_SERVICE));
 

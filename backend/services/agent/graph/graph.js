@@ -14,7 +14,12 @@ const workflow = new StateGraph(agentState);
 
 workflow.addNode("router", routerAgent);
 
-workflow.addNode("chat", chatAgent);
+workflow.addNode("chat", (state, config) => {
+  return chatAgent(state, {
+    onChunk: config?.configurable?.onChunk,
+    signal: config?.signal,
+  });
+});
 
 workflow.addNode("search", searchAgent);
 workflow.addNode("pdf", pdfAgent);

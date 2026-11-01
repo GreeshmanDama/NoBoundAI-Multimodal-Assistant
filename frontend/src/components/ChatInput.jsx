@@ -37,6 +37,7 @@ import {
   setCovTitle,
   setSelectedConversation,
 } from "../redux/conversationSlice";
+import { createChunkBuffer } from "../../utils/createChunckBuffer";
 
 // Append `addition` to `base` with a single space between them.
 const joinText = (base, addition) => {
@@ -360,42 +361,45 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
       // Remove the selected attachment after adding it to FormData.
       removeSelectedFile();
 
+      const buffer = createChunkBuffer((text) =>
+        dispatch(appendMessageChunk({ id: assistantMessageId, text })),
+      );
+      let finalData = null;
+      let loadingHidden = false;
+
       await sendMessageStream(formData, {
-        // Append every generated chunk to the same message.
         onChunk: (chunk) => {
-          dispatch(
-            appendMessageChunk({
-              id: assistantMessageId,
-              text: chunk,
-            }),
-          );
-
-          // Hide the initial loading animation once text arrives.
-          dispatch(setIsLoading(false));
-        },
-
-        // Final answer and generated images.
-        onDone: (data) => {
-          if (typeof data.answer === "string") {
-            dispatch(
-              updateMessageContent({
-                id: assistantMessageId,
-                content: data.answer,
-              }),
-            );
+          if (!loadingHidden) {
+            loadingHidden = true;
+            dispatch(setIsLoading(false));
           }
-
-          dispatch(
-            updateMessageImages({
-              id: assistantMessageId,
-              images: data.images || [],
-            }),
-          );
-
-          dispatch(finishStreamingMessage(assistantMessageId));
-          dispatch(setIsLoading(false));
+          buffer.push(chunk);
+        },
+        onDone: (data) => {
+          finalData = data;
         },
       });
+
+      // Let the smoothed text finish before swapping in the final answer.
+      await buffer.drain();
+
+      if (finalData) {
+        if (typeof finalData.answer === "string") {
+          dispatch(
+            updateMessageContent({
+              id: assistantMessageId,
+              content: finalData.answer,
+            }),
+          );
+        }
+        dispatch(
+          updateMessageImages({
+            id: assistantMessageId,
+            images: finalData.images || [],
+          }),
+        );
+        dispatch(finishStreamingMessage(assistantMessageId));
+      }
 
       setSelectedFile(null);
 
@@ -584,7 +588,7 @@ function ChatInput({ selectedAgent, setSelectedAgent }) {
             }}
             onPaste={handlePaste}
             rows={1}
-            disabled={waitResponse}
+            // disabled={waitResponse}
             onKeyDown={handleKeyDown}
             placeholder={
               isListening ? "Listening... speak now" : "Message NoBound AI..."
