@@ -4,6 +4,7 @@ import Home from "./pages/Home";
 import getCurrentUser from "./features/getCurrentUser";
 import { setUserData } from "./redux/userSlice";
 import { Toaster } from "react-hot-toast";
+import "katex/dist/katex.min.css";
 
 function App() {
   const dispatch = useDispatch();
