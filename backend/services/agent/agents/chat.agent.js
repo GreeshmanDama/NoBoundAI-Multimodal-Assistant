@@ -12,15 +12,16 @@ import { fetchUrlsFromPrompt } from "../config/fetchUrlContent.js";
  * Chat Agent
  *
  * Features:
- * - Streaming responses
- * - Automatic continuation when output hits token limit
+ * - REAL-TIME streaming (tokens are forwarded to the client as they arrive)
+ * - Automatic continuation when the output hits the token limit
  * - Continuation for unfinished Markdown code fences
- * - Duplicate/overlap removal between continuation chunks
- * - Conversation history
- * - Search result context
- * - URL/page retrieval
- * - Retry handling
- * - Request cancellation
+ * - Streaming overlap removal between continuation chunks
+ * - First-token / idle watchdog (a stuck provider is aborted and retried)
+ * - Retries only when nothing was streamed yet; mid-stream failures are
+ *   recovered through continuation instead of restarting the answer
+ * - Parallel setup (credits + memory + URL fetch run together)
+ * - Conversation history, search context, URL/page retrieval
+ * - Request cancellation (partial text is preserved)
  * - Credit deduction
  */
 
@@ -28,42 +29,77 @@ import { fetchUrlsFromPrompt } from "../config/fetchUrlContent.js";
 // CONFIGURATION
 // -----------------------------------------------------------------------------
 
-const REQUEST_RETRIES = 2;
+const envInt = (name, fallback) => {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
 
-const RETRY_BASE_DELAY_MS = 1000;
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+
+const CHAT_MODEL = process.env.CHAT_MODEL || "auto";
+
+// Retries per LLM request (only used when NOTHING has been streamed yet).
+const REQUEST_RETRIES = envInt("CHAT_REQUEST_RETRIES", 2);
+
+const RETRY_BASE_DELAY_MS = 500;
+const RETRY_MAX_DELAY_MS = 4000;
+
+// Watchdogs. If the provider is silent for longer than these limits the
+// request is aborted and retried (this is what fixes "sometimes very slow").
+const FIRST_TOKEN_TIMEOUT_MS = envInt("CHAT_FIRST_TOKEN_TIMEOUT_MS", 25000);
+const STREAM_IDLE_TIMEOUT_MS = envInt("CHAT_STREAM_IDLE_TIMEOUT_MS", 30000);
+const PLAIN_RESPONSE_TIMEOUT_MS = 90000; // non-streaming fallback
+
+// Max time we wait for webpage retrieval before answering without it.
+const URL_FETCH_TIMEOUT_MS = envInt("CHAT_URL_FETCH_TIMEOUT_MS", 10000);
 
 // Maximum number of additional LLM calls after the initial request.
-//
-// Example:
-// CHAT_MAX_CONTINUATIONS = 5
-//
-// Maximum possible calls:
-// 1 initial request + 5 continuation requests = 6 calls.
-const CHAT_MAX_CONTINUATIONS = 5;
+// 1 initial request + CHAT_MAX_CONTINUATIONS continuation requests.
+const CHAT_MAX_CONTINUATIONS = envInt("CHAT_MAX_CONTINUATIONS", 5);
 
 // Only the tail of the previous answer is sent to the continuation request.
-// This prevents unnecessarily sending the entire generated answer again.
-const CHAT_CONTINUATION_CONTEXT_CHARS = 12000;
+const CHAT_CONTINUATION_CONTEXT_CHARS = 6000;
 
 // Maximum output requested from the LLM for each generation.
-const CHAT_MAX_OUTPUT_TOKENS = 8192;
+const CHAT_MAX_OUTPUT_TOKENS = envInt("CHAT_MAX_OUTPUT_TOKENS", 8192);
 
-// Overlap detection limits.
+// Overlap detection limits (continuation head vs previous tail).
 const MAX_OVERLAP_CHARS = 800;
 const MIN_OVERLAP_CHARS = 24;
 
+// Prompt size limits (smaller prompt = faster time to first token).
+const HISTORY_LIMIT = 20;
+const MAX_HISTORY_MESSAGE_CHARS = 8000;
+const MAX_SEARCH_RESULTS = 18;
+const MAX_SEARCH_CONTENT_CHARS = 1500;
+const MAX_PAGE_CHARS = 15000;
+
+const URL_PATTERN = /https?:\/\/[^\s<>"']+/gi;
 
 // -----------------------------------------------------------------------------
 // SMALL HELPERS
 // -----------------------------------------------------------------------------
 
-const sleep = (ms) =>
-  new Promise((resolve) => setTimeout(resolve, ms));
+// Abortable sleep: resolves early if the signal aborts.
+const sleep = (ms, signal) =>
+  new Promise((resolve) => {
+    if (signal?.aborted) {
+      return resolve();
+    }
 
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
 
-const getStatus = (error) =>
-  error?.status ?? error?.response?.status;
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
 
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+
+const getStatus = (error) => error?.status ?? error?.response?.status;
 
 const getTextContent = (content) => {
   if (typeof content === "string") {
@@ -80,6 +116,22 @@ const getTextContent = (content) => {
   return "";
 };
 
+const truncate = (value, max) => {
+  const text = String(value ?? "");
+
+  return text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text;
+};
+
+// Resolves with onTimeout() if the promise takes longer than `ms`.
+const withTimeout = (promise, ms, onTimeout) => {
+  let timer;
+
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(onTimeout()), ms);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+};
 
 // -----------------------------------------------------------------------------
 // SAFE STREAM EMITTER
@@ -89,11 +141,7 @@ const createSafeEmitter = (onChunk) => {
   let broken = false;
 
   return (delta) => {
-    if (
-      typeof onChunk !== "function" ||
-      broken ||
-      !delta
-    ) {
+    if (typeof onChunk !== "function" || broken || !delta) {
       return;
     }
 
@@ -110,24 +158,16 @@ const createSafeEmitter = (onChunk) => {
   };
 };
 
-
 // -----------------------------------------------------------------------------
-// FINISH REASON HELPERS
-// -----------------------------------------------------------------------------
-
-const isLengthFinish = (finishReason) => {
-  return (
-    finishReason === "length" ||
-    finishReason === "max_tokens" ||
-    finishReason === "max_output_tokens"
-  );
-};
-
-
-// -----------------------------------------------------------------------------
-// MARKDOWN CODE FENCE DETECTION
+// FINISH REASON / MARKDOWN HELPERS
 // -----------------------------------------------------------------------------
 
+const isLengthFinish = (finishReason) =>
+  finishReason === "length" ||
+  finishReason === "max_tokens" ||
+  finishReason === "max_output_tokens";
+
+// Odd number of ``` means one fence is still open.
 const hasOpenCodeFence = (text) => {
   if (!text) {
     return false;
@@ -135,385 +175,479 @@ const hasOpenCodeFence = (text) => {
 
   const matches = text.match(/```/g);
 
-  if (!matches) {
-    return false;
-  }
-
-  // Odd number of ``` means one fence is still open.
-  return matches.length % 2 !== 0;
+  return Boolean(matches) && matches.length % 2 !== 0;
 };
 
+// -----------------------------------------------------------------------------
+// ERROR CLASSIFICATION + RETRY DELAY
+// -----------------------------------------------------------------------------
+
+const NETWORK_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+]);
+
+const makeTimeoutError = (kind) => {
+  const error = new Error(`LLM ${kind} timeout`);
+
+  error.code = "LLM_TIMEOUT";
+
+  return error;
+};
+
+const isTransientError = (error) => {
+  if (error?.code === "LLM_TIMEOUT") {
+    return true;
+  }
+
+  const status = getStatus(error);
+
+  if (status) {
+    return (
+      status === 408 ||
+      status === 409 ||
+      status === 425 ||
+      status === 429 ||
+      status >= 500
+    );
+  }
+
+  if (NETWORK_ERROR_CODES.has(error?.code ?? error?.cause?.code)) {
+    return true;
+  }
+
+  const name = error?.name || "";
+
+  if (
+    name === "APIConnectionError" ||
+    name === "APIConnectionTimeoutError"
+  ) {
+    return true;
+  }
+
+  return /fetch failed|network|socket|terminated|premature close/i.test(
+    error?.message || "",
+  );
+};
+
+const getRetryDelay = (error, attempt) => {
+  const retryAfter = Number(error?.headers?.["retry-after"]);
+
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.min(retryAfter * 1000, RETRY_MAX_DELAY_MS);
+  }
+
+  const exponential = RETRY_BASE_DELAY_MS * 2 ** attempt;
+
+  // Small jitter so parallel users don't retry in lockstep.
+  return Math.min(
+    exponential + Math.floor(Math.random() * 250),
+    RETRY_MAX_DELAY_MS,
+  );
+};
 
 // -----------------------------------------------------------------------------
-// MERGE / OVERLAP HANDLING
+// STREAMING OVERLAP REMOVAL (continuation requests)
 // -----------------------------------------------------------------------------
 
 /*
- * When continuation requests are made, the model can sometimes repeat
- * the end of the previous answer.
+ * When a continuation is requested the model sometimes repeats the end of the
+ * previous answer. Because we now stream in real time, we cannot wait for the
+ * whole continuation before removing the repeat. Instead:
  *
- * Example:
+ *   1. Hold back only the first few characters of the continuation.
+ *   2. As soon as it is certain whether those characters repeat the previous
+ *      tail (usually after ~24 chars) remove the repeat and start streaming.
+ *   3. Everything after that passes straight through.
  *
- * Previous:
- *   Google released Gemini 3.
- *
- * Continuation:
- *   Google released Gemini 3. Microsoft released...
- *
- * We remove the repeated portion.
+ * Phase 0 = detecting overlap
+ * Phase 1 = detecting a re-opened code fence (e.g. "```js" while a fence is
+ *           already open)
+ * Phase 2 = pass-through
  */
-const mergeChunks = (previous, next) => {
-  if (!next) {
-    return previous;
+
+const WAIT = { wait: true, skip: 0 };
+const NO_OVERLAP = { wait: false, skip: 0 };
+
+const findOverlap = (tail, head, final) => {
+  if (head.length < MIN_OVERLAP_CHARS) {
+    return final ? NO_OVERLAP : WAIT;
   }
 
-  if (!previous) {
-    return next;
-  }
+  const first = head.charCodeAt(0);
 
-  const maxOverlap = Math.min(
-    MAX_OVERLAP_CHARS,
-    previous.length,
-    next.length,
-  );
+  const startPos = Math.max(0, tail.length - MAX_OVERLAP_CHARS);
+  const lastPos = tail.length - MIN_OVERLAP_CHARS;
 
-  for (
-    let size = maxOverlap;
-    size >= MIN_OVERLAP_CHARS;
-    size--
-  ) {
-    const previousTail = previous.slice(-size);
-    const nextHead = next.slice(0, size);
+  let pending = false;
 
-    if (previousTail === nextHead) {
-      return previous + next.slice(size);
+  // Ascending pos = descending overlap size, so the first verified match is
+  // the largest one.
+  for (let pos = startPos; pos <= lastPos; pos++) {
+    if (tail.charCodeAt(pos) !== first) {
+      continue;
+    }
+
+    const size = tail.length - pos;
+
+    if (head.length >= size) {
+      if (head.startsWith(tail.slice(pos))) {
+        // A longer candidate may still be confirmed by more text.
+        return pending && !final ? WAIT : { wait: false, skip: size };
+      }
+    } else if (tail.startsWith(head, pos)) {
+      pending = true;
     }
   }
 
-  return previous + next;
+  if (pending) {
+    // Whole continuation so far is a repeat of the tail.
+    return final ? { wait: false, skip: head.length } : WAIT;
+  }
+
+  return NO_OVERLAP;
 };
 
+const createContinuationStreamer = ({ previousText, fenceOpen }) => {
+  const tail = previousText.slice(-MAX_OVERLAP_CHARS);
 
-// -----------------------------------------------------------------------------
-// CONTINUATION PROMPT
-// -----------------------------------------------------------------------------
+  let phase = tail.length >= MIN_OVERLAP_CHARS ? 0 : fenceOpen ? 1 : 2;
 
-const buildContinuationPrompt = (text) => {
-  const previousTail = text.slice(
-    -CHAT_CONTINUATION_CONTEXT_CHARS,
-  );
+  let buffer = "";
 
-  return `
-Your previous response was cut off before it was complete.
+  const advance = (final) => {
+    if (phase === 0) {
+      const { wait, skip } = findOverlap(tail, buffer, final);
 
-Continue the response EXACTLY from where you stopped.
+      if (wait) {
+        return "";
+      }
 
-IMPORTANT RULES:
+      buffer = buffer.slice(skip);
 
-- Do NOT repeat the previous response.
-- Do NOT restart the answer.
-- Do NOT add an introduction.
-- Do NOT say "Sure, continuing".
-- Do NOT explain that you are continuing.
-- Continue naturally from the exact point where the response stopped.
-- Preserve the existing Markdown formatting.
-- Preserve numbered lists and bullet lists.
-- If you were explaining search results, continue with the remaining results.
-- If you were writing a table, continue the table correctly.
-- If you were writing code, continue the existing code.
-- If a Markdown code fence is already open, continue inside it.
-- Output ONLY the continuation.
+      phase = fenceOpen ? 1 : 2;
+    }
 
-Here is the tail of your previous response for context:
+    if (phase === 1) {
+      const trimmed = buffer.trimStart();
 
---- BEGIN PREVIOUS RESPONSE TAIL ---
+      const reopened = trimmed.match(/^```[A-Za-z][^\n`]*\n/);
 
-${previousTail}
+      if (reopened) {
+        // Model re-opened the fence we are already inside: drop that line.
+        buffer = trimmed.slice(reopened[0].length);
 
---- END PREVIOUS RESPONSE TAIL ---
-`;
+        phase = 2;
+      } else if (
+        !final &&
+        (/^`{0,3}$/.test(trimmed) ||
+          (/^```[^\n]*$/.test(trimmed) && trimmed.length < 60))
+      ) {
+        return "";
+      } else {
+        phase = 2;
+      }
+    }
+
+    const out = buffer;
+
+    buffer = "";
+
+    return out;
+  };
+
+  return {
+    // Returns the text that is safe to emit now (may be "").
+    push(delta) {
+      if (phase === 2) {
+        return delta;
+      }
+
+      buffer += delta;
+
+      return advance(false);
+    },
+
+    // Flush whatever is still held back when the stream ends.
+    finish() {
+      return phase === 2 ? "" : advance(true);
+    },
+  };
 };
-
 
 // -----------------------------------------------------------------------------
 // CONTINUATION MESSAGES
 // -----------------------------------------------------------------------------
 
-const buildContinuationMessages = (
-  baseMessages,
-  previousText,
-) => {
-  const previousTail = previousText.slice(
-    -CHAT_CONTINUATION_CONTEXT_CHARS,
-  );
+const CONTINUATION_PROMPT = `Your previous response was cut off. Continue EXACTLY from the last character of your previous message above.
 
-  return [
-    ...baseMessages,
+- Output ONLY the continuation: no introduction, no recap, no repeated text.
+- Keep the same Markdown formatting, lists and tables.
+- If a code block is still open, continue inside it without re-opening it.`;
 
-    {
-      role: "assistant",
-      content: previousTail,
-    },
+const buildContinuationMessages = (baseMessages, previousText) => [
+  ...baseMessages,
 
-    {
-      role: "user",
-      content: buildContinuationPrompt(previousText),
-    },
-  ];
-};
+  {
+    role: "assistant",
+    content: previousText.slice(-CHAT_CONTINUATION_CONTEXT_CHARS),
+  },
 
+  {
+    role: "user",
+    content: CONTINUATION_PROMPT,
+  },
+];
 
 // -----------------------------------------------------------------------------
-// LLM REQUEST
+// SINGLE LLM ATTEMPT (streaming + watchdog)
 // -----------------------------------------------------------------------------
 
 /*
- * Makes ONE LLM request.
+ * One attempt = one HTTP request to the LLM.
  *
- * Important:
- *
- * This function does NOT decide whether another request is needed.
- *
- * It only:
- *   1. Calls the model
- *   2. Streams the response
- *   3. Captures finish_reason
- *
- * generateCompleteChat() decides whether to continue.
+ * - Every delta is forwarded to onDelta IMMEDIATELY.
+ * - A watchdog aborts the request if no first chunk arrives in time, or if the
+ *   stream stalls mid-way.
+ * - The SDK's own retries are disabled (maxRetries: 0) so retry behaviour is
+ *   controlled in one place only (requestCompletion).
  */
-const requestCompletion = async ({
-  messages,
-  signal,
-  onDelta,
-}) => {
+const runAttempt = async ({ messages, model, signal, onDelta }) => {
+  const controller = new AbortController();
+
+  const onParentAbort = () => controller.abort();
+
+  if (signal?.aborted) {
+    controller.abort();
+  } else {
+    signal?.addEventListener("abort", onParentAbort, { once: true });
+  }
+
+  const startedAt = Date.now();
+
+  let lastActivity = startedAt;
+  let gotChunk = false;
+  let firstTokenLimit = FIRST_TOKEN_TIMEOUT_MS;
+  let timedOut = null;
+
+  const watchdog = setInterval(() => {
+    const limit = gotChunk ? STREAM_IDLE_TIMEOUT_MS : firstTokenLimit;
+
+    if (Date.now() - lastActivity > limit) {
+      timedOut = gotChunk ? "idle" : "first-token";
+
+      controller.abort();
+    }
+  }, 500);
+
   const params = {
-    model: "auto",
+    model,
     messages,
     max_tokens: CHAT_MAX_OUTPUT_TOKENS,
   };
 
-  const requestOptions = signal
-    ? { signal }
-    : undefined;
-
-
-  // ---------------------------------------------------------------------------
-  // NORMAL / NON-STREAMING FALLBACK
-  // ---------------------------------------------------------------------------
-
-  const runPlain = async () => {
-    const response =
-      await freeLLM.chat.completions.create(
-        params,
-        requestOptions,
-      );
-
-    const choice =
-      response.choices?.[0];
-
-    const content =
-      getTextContent(
-        choice?.message?.content,
-      );
-
-    const finishReason =
-      choice?.finish_reason ?? null;
-
-    if (content) {
-      onDelta(content);
-    }
-
-    return {
-      text: content || "",
-      finishReason,
-    };
+  const requestOptions = {
+    signal: controller.signal,
+    maxRetries: 0,
   };
 
-
-  // ---------------------------------------------------------------------------
-  // STREAMING REQUEST
-  // ---------------------------------------------------------------------------
-
-  const runStream = async () => {
+  try {
     let stream;
 
     try {
-      stream =
-        await freeLLM.chat.completions.create(
-          {
-            ...params,
-            stream: true,
-          },
-          requestOptions,
-        );
+      stream = await freeLLM.chat.completions.create(
+        { ...params, stream: true },
+        requestOptions,
+      );
     } catch (error) {
       const status = getStatus(error);
 
       /*
        * Some OpenAI-compatible providers may not support streaming.
-       *
-       * Fall back to a normal completion for:
-       * 400 / 404 / 501.
+       * Fall back to a normal completion for 400 / 404 / 501.
        */
       if (
-        status === 400 ||
-        status === 404 ||
-        status === 501
+        !timedOut &&
+        !signal?.aborted &&
+        (status === 400 || status === 404 || status === 501)
       ) {
         console.warn(
           `[CHAT] Streaming rejected (${status}). Using a normal request.`,
         );
 
-        return runPlain();
+        firstTokenLimit = PLAIN_RESPONSE_TIMEOUT_MS;
+
+        lastActivity = Date.now();
+
+        const response = await freeLLM.chat.completions.create(
+          params,
+          requestOptions,
+        );
+
+        const choice = response.choices?.[0];
+
+        const content = getTextContent(choice?.message?.content);
+
+        if (content) {
+          onDelta(content);
+        }
+
+        return choice?.finish_reason ?? null;
       }
 
       throw error;
     }
 
-
-    let text = "";
-
     let finishReason = null;
 
-
     for await (const chunk of stream) {
-      if (signal?.aborted) {
+      if (controller.signal.aborted) {
         break;
       }
 
-      const choice =
-        chunk.choices?.[0];
+      lastActivity = Date.now();
 
-      const content =
-        getTextContent(
-          choice?.delta?.content,
-        );
+      const choice = chunk.choices?.[0];
+
+      const content = getTextContent(choice?.delta?.content);
 
       if (content) {
-        text += content;
+        if (!gotChunk) {
+          console.log(
+            `[CHAT] First token after ${Date.now() - startedAt}ms`,
+          );
+        }
 
         onDelta(content);
       }
 
-      /*
-       * finish_reason is normally included on the final chunk.
-       */
+      // Any chunk (even an empty role/keep-alive chunk) proves the provider
+      // is alive.
+      gotChunk = true;
+
+      // finish_reason is normally included on the final chunk.
       if (choice?.finish_reason) {
-        finishReason =
-          choice.finish_reason;
+        finishReason = choice.finish_reason;
       }
     }
 
+    if (timedOut) {
+      throw makeTimeoutError(timedOut);
+    }
 
-    return {
-      text,
-      finishReason,
-    };
-  };
+    return finishReason;
+  } catch (error) {
+    if (timedOut) {
+      throw makeTimeoutError(timedOut);
+    }
 
+    throw error;
+  } finally {
+    clearInterval(watchdog);
 
-  // ---------------------------------------------------------------------------
-  // RETRY LOGIC
-  // ---------------------------------------------------------------------------
+    signal?.removeEventListener("abort", onParentAbort);
+  }
+};
 
+// -----------------------------------------------------------------------------
+// LLM REQUEST WITH RETRIES
+// -----------------------------------------------------------------------------
+
+/*
+ * Makes ONE logical LLM request (with retries).
+ *
+ * Retry rule:
+ *   - Nothing streamed yet  -> safe to retry (transient errors / timeouts).
+ *   - Text already streamed -> do NOT restart (would duplicate text). Return
+ *     { interrupted: true } so generateCompleteChat() continues the answer
+ *     from where it broke instead.
+ */
+const requestCompletion = async ({ messages, model, signal, onDelta }) => {
   let lastError;
 
+  for (let attempt = 0; attempt <= REQUEST_RETRIES; attempt++) {
+    let received = false;
 
-  for (
-    let attempt = 0;
-    attempt <= REQUEST_RETRIES;
-    attempt++
-  ) {
     try {
-      return await runStream();
+      const finishReason = await runAttempt({
+        messages,
+        model,
+        signal,
+
+        onDelta: (text) => {
+          received = true;
+
+          onDelta(text);
+        },
+      });
+
+      return { finishReason, interrupted: false };
     } catch (error) {
-      lastError = error;
-
-
       if (signal?.aborted) {
         throw error;
       }
 
+      lastError = error;
 
-      const status =
-        getStatus(error);
+      if (received) {
+        console.warn(
+          `[CHAT] Stream interrupted after partial output (${
+            getStatus(error) ?? error.message
+          }). Will continue instead of restarting.`,
+        );
 
+        return { finishReason: null, interrupted: true, error };
+      }
 
-      const transient =
-        !status ||
-        status === 408 ||
-        status === 429 ||
-        status >= 500;
-
-
-      /*
-       * Retry transient errors.
-       *
-       * Since each request returns its complete buffered result to
-       * generateCompleteChat(), we don't risk duplicating already-emitted
-       * continuation text here.
-       */
-      if (
-        !transient ||
-        attempt === REQUEST_RETRIES
-      ) {
+      if (!isTransientError(error) || attempt === REQUEST_RETRIES) {
         break;
       }
 
-
-      const delay =
-        RETRY_BASE_DELAY_MS *
-        2 ** attempt;
-
+      const delay = getRetryDelay(error, attempt);
 
       console.warn(
         `[CHAT] Request failed (${
-          status ?? error.message
-        }). Retrying in ${delay}ms...`,
+          getStatus(error) ?? error.message
+        }). Retrying in ${delay}ms (${attempt + 1}/${REQUEST_RETRIES})...`,
       );
 
+      await sleep(delay, signal);
 
-      await sleep(delay);
+      if (signal?.aborted) {
+        break;
+      }
     }
   }
 
-
   throw lastError;
 };
-
 
 // -----------------------------------------------------------------------------
 // COMPLETE CHAT GENERATION
 // -----------------------------------------------------------------------------
 
 /*
- * This is the important part.
+ * JavaScript controls the loop; the LLM does not know how many requests are
+ * needed.
  *
- * The LLM does NOT know how many requests it needs.
+ *   Request #1  -> streams straight to the client
+ *   finish_reason = "length" (or stream interrupted / open code fence)
+ *   Request #2  -> streams straight to the client, minus any repeated overlap
+ *   ...
+ *   finish_reason = "stop" -> DONE
  *
- * JavaScript controls the loop.
- *
- * Example:
- *
- * Request #1
- *     ↓
- * finish_reason = "length"
- *     ↓
- * Request #2
- *     ↓
- * finish_reason = "length"
- *     ↓
- * Request #3
- *     ↓
- * finish_reason = "stop"
- *     ↓
- * DONE
+ * Never throws because of cancellation or a late failure: whatever text was
+ * produced is returned so it can still be saved.
  */
-const generateCompleteChat = async ({
-  baseMessages,
-  signal,
-  emit,
-}) => {
+const generateCompleteChat = async ({ baseMessages, model, signal, emit }) => {
   let fullText = "";
 
   let finishReason = null;
@@ -522,164 +656,132 @@ const generateCompleteChat = async ({
 
   let fenceContinuationUsed = false;
 
+  let error = null;
+
+  let aborted = false;
+
+  const append = (text) => {
+    if (!text) {
+      return;
+    }
+
+    fullText += text;
+
+    emit(text);
+  };
 
   while (true) {
     if (signal?.aborted) {
-      throw new Error(
-        "Generation cancelled",
-      );
-    }
+      aborted = true;
 
-
-    const requestNumber =
-      continuations + 1;
-
-
-    console.log(
-      `[CHAT] Starting LLM request #${requestNumber}...`,
-    );
-
-
-    /*
-     * First request:
-     *
-     *     system + history + user
-     *
-     * Continuation request:
-     *
-     *     system + history + user
-     *     + previous answer tail
-     *     + continuation instruction
-     */
-    const messages =
-      continuations === 0
-        ? baseMessages
-        : buildContinuationMessages(
-            baseMessages,
-            fullText,
-          );
-
-
-    /*
-     * For the continuation request we BUFFER the generated text.
-     *
-     * Why?
-     *
-     * Because the model might repeat some of the previous response.
-     *
-     * We don't want the repeated portion immediately sent to the frontend.
-     */
-    let chunkText = "";
-
-
-    const result =
-      await requestCompletion({
-        messages,
-        signal,
-
-        onDelta: (text) => {
-          chunkText += text;
-        },
-      });
-
-
-    finishReason =
-      result.finishReason;
-
-
-    console.log(
-      `[CHAT] LLM request #${requestNumber} finished: ${finishReason}`,
-    );
-
-
-    /*
-     * Merge the new chunk with the existing response.
-     */
-    if (chunkText) {
-      const previousLength =
-        fullText.length;
-
-
-      fullText = mergeChunks(
-        fullText,
-        chunkText,
-      );
-
-
-      /*
-       * Only emit the genuinely new portion.
-       *
-       * For the first request this is basically the entire response.
-       *
-       * For continuation requests this excludes any overlap.
-       */
-      const newText =
-        fullText.slice(previousLength);
-
-
-      if (newText) {
-        emit(newText);
-      }
-    }
-
-
-    if (signal?.aborted) {
       break;
     }
 
+    const isContinuation = continuations > 0;
+
+    const requestNumber = continuations + 1;
+
+    console.log(`[CHAT] Starting LLM request #${requestNumber}...`);
+
+    const messages = isContinuation
+      ? buildContinuationMessages(baseMessages, fullText)
+      : baseMessages;
+
+    const streamer = isContinuation
+      ? createContinuationStreamer({
+          previousText: fullText,
+          fenceOpen: hasOpenCodeFence(fullText),
+        })
+      : null;
+
+    const lengthBefore = fullText.length;
+
+    let result;
+
+    try {
+      result = await requestCompletion({
+        messages,
+        model,
+        signal,
+
+        // Live streaming: first request goes straight through, continuation
+        // requests only hold back the first few characters (overlap check).
+        onDelta: (delta) => append(streamer ? streamer.push(delta) : delta),
+      });
+    } catch (err) {
+      if (streamer) {
+        append(streamer.finish());
+      }
+
+      if (signal?.aborted) {
+        aborted = true;
+
+        break;
+      }
+
+      // Nothing was produced at all -> real failure, let the caller handle it.
+      if (!fullText) {
+        throw err;
+      }
+
+      // We already have a partial answer: keep it instead of discarding it.
+      console.warn(
+        `[CHAT] Continuation #${continuations} failed, returning partial answer:`,
+        err?.message,
+      );
+
+      error = err;
+
+      break;
+    }
+
+    if (streamer) {
+      append(streamer.finish());
+    }
+
+    finishReason = result.finishReason;
+
+    console.log(
+      `[CHAT] LLM request #${requestNumber} finished: ${
+        result.interrupted ? "interrupted" : finishReason
+      }`,
+    );
+
+    if (signal?.aborted) {
+      aborted = true;
+
+      break;
+    }
+
+    // A continuation that adds nothing new means we're looping: stop.
+    if (isContinuation && fullText.length === lengthBefore) {
+      console.warn("[CHAT] Continuation produced no new text. Stopping.");
+
+      break;
+    }
 
     // -------------------------------------------------------------------------
     // DETERMINE WHETHER ANOTHER REQUEST IS REQUIRED
     // -------------------------------------------------------------------------
 
-    const cutOff =
-      isLengthFinish(
-        finishReason,
-      );
+    const cutOff = result.interrupted || isLengthFinish(finishReason);
 
+    const unfinishedCode = hasOpenCodeFence(fullText);
 
-    const unfinishedCode =
-      hasOpenCodeFence(
-        fullText,
-      );
-
-
-    /*
-     * Normal completion:
-     *
-     * finish_reason = "stop"
-     * AND
-     * no unfinished code fence
-     *
-     * => DONE
-     */
-    if (
-      !cutOff &&
-      !unfinishedCode
-    ) {
-      console.log(
-        "[CHAT] Response completed normally.",
-      );
+    // finish_reason = "stop" and no open code fence => DONE
+    if (!cutOff && !unfinishedCode) {
+      console.log("[CHAT] Response completed normally.");
 
       break;
     }
 
-
     /*
-     * If the provider says "stop" but a code block is still open,
-     * allow one continuation attempt.
-     *
-     * We don't want an endless loop caused by a malformed Markdown
-     * response.
+     * Provider says "stop" but a code block is still open: allow ONE
+     * continuation attempt so a malformed response can't loop forever.
      */
-    if (
-      !cutOff &&
-      unfinishedCode
-    ) {
+    if (!cutOff && unfinishedCode) {
       if (fenceContinuationUsed) {
-        console.warn(
-          "[CHAT] Open code fence detected again. Stopping.",
-        );
+        console.warn("[CHAT] Open code fence detected again. Stopping.");
 
         break;
       }
@@ -691,31 +793,8 @@ const generateCompleteChat = async ({
       );
     }
 
-
-    /*
-     * Maximum continuation protection.
-     *
-     * continuations represents additional calls AFTER the first call.
-     *
-     * If:
-     *
-     * CHAT_MAX_CONTINUATIONS = 5
-     *
-     * Then:
-     *
-     * Request #1 = initial
-     * Request #2 = continuation 1
-     * Request #3 = continuation 2
-     * Request #4 = continuation 3
-     * Request #5 = continuation 4
-     * Request #6 = continuation 5
-     *
-     * Maximum = 6 requests.
-     */
-    if (
-      continuations >=
-      CHAT_MAX_CONTINUATIONS
-    ) {
+    // Maximum continuation protection (1 initial + N continuations).
+    if (continuations >= CHAT_MAX_CONTINUATIONS) {
       console.warn(
         `[CHAT] Maximum continuation limit reached (${CHAT_MAX_CONTINUATIONS}).`,
       );
@@ -723,82 +802,40 @@ const generateCompleteChat = async ({
       break;
     }
 
-
     continuations++;
-
 
     console.log(
       `[CHAT] Response requires continuation ${continuations}/${CHAT_MAX_CONTINUATIONS}...`,
     );
   }
 
-
   return {
     text: fullText,
     finishReason,
     continuations,
+    aborted,
+    error,
   };
 };
 
-
 // -----------------------------------------------------------------------------
-// CHAT AGENT
+// CONTEXT BUILDERS
 // -----------------------------------------------------------------------------
 
-export const chatAgent = async (
-  state,
-  options = {},
-) => {
-  let aiResponse = "";
+const buildSearchContext = (searchResults) => {
+  if (!Array.isArray(searchResults)) {
+    return "";
+  }
 
+  const items = searchResults.slice(0, MAX_SEARCH_RESULTS).map((result) => ({
+    title: result.title,
 
-  const emit =
-    createSafeEmitter(
-      options.onChunk ??
-        state.onChunk,
-    );
+    content: truncate(result.content || "", MAX_SEARCH_CONTENT_CHARS),
 
+    url: result.url,
+  }));
 
-  const signal =
-    options.signal;
-
-
-  try {
-    // -------------------------------------------------------------------------
-    // 1. CHECK CREDITS + GET MEMORY
-    // -------------------------------------------------------------------------
-
-    const [
-      _,
-      history,
-    ] = await Promise.all([
-      checkLimit(
-        state.userId,
-        "chat",
-      ),
-
-      getMemory(
-        state.conversationId,
-      ),
-    ]);
-
-
-    if (signal?.aborted) {
-      throw new Error(
-        "Generation cancelled",
-      );
-    }
-
-
-    // -------------------------------------------------------------------------
-    // 2. SEARCH CONTEXT
-    // -------------------------------------------------------------------------
-
-    const searchContext =
-      Array.isArray(
-        state.searchResults,
-      )
-        ? `
+  return `
 You are answering a web-search question.
 
 Use ONLY the following search results as your primary evidence.
@@ -809,72 +846,62 @@ Include relevant source URLs in your response.
 
 SEARCH RESULTS:
 
-${JSON.stringify(
-  state.searchResults
-    .slice(0, 18)
-    .map((result) => ({
-      title: result.title,
+${JSON.stringify(items)}
+`;
+};
 
-      content:
-        String(result.content || "",),
-        url: result.url,
-    })),
-)}
-`
-        : "";
+// Fetches pages mentioned in the prompt. Never throws and never blocks the
+// answer for longer than URL_FETCH_TIMEOUT_MS.
+const fetchWebpages = async (prompt) => {
+  const urls = prompt.match(URL_PATTERN) || [];
 
+  if (!urls.length) {
+    return [];
+  }
 
-    // -------------------------------------------------------------------------
-    // 3. FETCH WEBPAGE CONTENT WHEN USER PROVIDES URLS
-    // -------------------------------------------------------------------------
+  try {
+    return await withTimeout(fetchUrlsFromPrompt(prompt), URL_FETCH_TIMEOUT_MS, () =>
+      urls.map((url) => ({
+        url,
+        success: false,
+        error: `Timed out after ${URL_FETCH_TIMEOUT_MS / 1000}s`,
+      })),
+    );
+  } catch (error) {
+    console.warn("[CHAT] URL retrieval failed:", error.message);
 
-    /*
-     * Detect URLs in the current prompt.
-     */
-    const hasUrls =
-      /https?:\/\/[^\s<>"']+/i.test(
-        state.prompt || "",
-      );
+    return urls.map((url) => ({
+      url,
+      success: false,
+      error: error.message || "Retrieval failed",
+    }));
+  }
+};
 
-
-    const webpageResults =
-      hasUrls
-        ? await fetchUrlsFromPrompt(
-            state.prompt,
-          )
-        : [];
-
-
-    const webpageContext =
-      webpageResults
-        .map((page) => {
-          if (!page.success) {
-            return `
+const buildWebpageContext = (webpageResults) =>
+  (webpageResults || [])
+    .map((page) => {
+      if (!page.success) {
+        return `
 Source URL: ${page.url}
 
 Retrieval status: Failed
 
 Reason: ${page.error}
 `;
-          }
+      }
 
-
-          return `
+      return `
 Source URL: ${page.url}
 
 Retrieved webpage content:
 
-${page.content}
+${truncate(page.content, MAX_PAGE_CHARS)}
 `;
-        })
-        .join("\n");
+    })
+    .join("\n");
 
-
-    // -------------------------------------------------------------------------
-    // 4. SYSTEM PROMPT
-    // -------------------------------------------------------------------------
-
-    const systemPrompt = `
+const buildSystemPrompt = ({ searchContext, webpageContext }) => `
 You are NoBound AI, a helpful, intelligent, and reliable AI assistant created by Greeshman, a Computer Science graduate.
 
 IDENTITY RULES
@@ -981,174 +1008,163 @@ When asked to continue:
 - Do not add unnecessary introductory text.
 `;
 
+const buildHistoryMessages = (history, prompt) => {
+  const messages = (Array.isArray(history) ? history : [])
+    .filter(
+      (msg) => msg && (msg.role === "user" || msg.role === "assistant"),
+    )
+    .slice(-HISTORY_LIMIT)
+    .map((msg) => ({
+      role: msg.role,
 
+      content: truncate(msg.content || "", MAX_HISTORY_MESSAGE_CHARS),
+    }));
+
+  if (!prompt) {
+    return messages;
+  }
+
+  /*
+   * Avoid duplicating the current user message. If memory already contains it,
+   * make sure the model sees the FULL prompt (history entries are truncated).
+   */
+  const last = messages[messages.length - 1];
+
+  if (last?.role === "user" && last.content === truncate(prompt, MAX_HISTORY_MESSAGE_CHARS)) {
+    last.content = prompt;
+  } else {
+    messages.push({ role: "user", content: prompt });
+  }
+
+  return messages;
+};
+
+// -----------------------------------------------------------------------------
+// CHAT AGENT
+// -----------------------------------------------------------------------------
+
+export const chatAgent = async (state, options = {}) => {
+  let aiResponse = "";
+
+  const emit = createSafeEmitter(options.onChunk ?? state.onChunk);
+
+  const signal = options.signal;
+
+  const model = options.model ?? CHAT_MODEL;
+
+  try {
     // -------------------------------------------------------------------------
-    // 5. BUILD CONVERSATION MESSAGES
-    // -------------------------------------------------------------------------
-
-    const messages = [
-      {
-        role: "system",
-        content: systemPrompt,
-      },
-    ];
-
-
-    /*
-     * Keep the most recent 20 messages.
-     */
-    const recentHistory =
-      history.slice(-20);
-
-
-    recentHistory.forEach(
-      (msg) => {
-        if (
-          msg.role === "user" ||
-          msg.role === "assistant"
-        ) {
-          messages.push({
-            role: msg.role,
-
-            content:
-              String(
-                msg.content || "",
-              ),
-          });
-        }
-      },
-    );
-
-
-    // -------------------------------------------------------------------------
-    // 6. AVOID DUPLICATING CURRENT USER MESSAGE
-    // -------------------------------------------------------------------------
-
-    const lastMessage =
-      messages[
-        messages.length - 1
-      ];
-
-
-    if (
-      state.prompt &&
-      (
-        lastMessage?.role !==
-          "user" ||
-        lastMessage.content !==
-          state.prompt
-      )
-    ) {
-      messages.push({
-        role: "user",
-        content: state.prompt,
-      });
-    }
-
-
-    // -------------------------------------------------------------------------
-    // 7. GENERATE COMPLETE RESPONSE
+    // 1. CREDITS + MEMORY + WEBPAGES (all in parallel)
     // -------------------------------------------------------------------------
 
-    console.log(
-      "[CHAT] Starting complete streaming generation...",
-    );
+    const prompt = state.prompt || "";
 
+    const [, history, webpageResults] = await Promise.all([
+      checkLimit(state.userId, "chat"),
 
-    const result =
-      await generateCompleteChat({
-        baseMessages: messages,
+      getMemory(state.conversationId),
 
-        signal,
-
-        emit,
-      });
-
-
-    aiResponse =
-      result.text;
-
+      fetchWebpages(prompt),
+    ]);
 
     if (signal?.aborted) {
-      return {
-        ...state,
-        aiResponse,
-      };
+      return { ...state, aiResponse };
     }
 
+    // -------------------------------------------------------------------------
+    // 2. BUILD MESSAGES
+    // -------------------------------------------------------------------------
 
-    console.log(
-      "[CHAT] Generation completed.",
-    );
+    const systemPrompt = buildSystemPrompt({
+      searchContext: buildSearchContext(state.searchResults),
 
+      webpageContext: buildWebpageContext(webpageResults),
+    });
+
+    const messages = [
+      { role: "system", content: systemPrompt },
+
+      ...buildHistoryMessages(history, state.prompt),
+    ];
+
+    // -------------------------------------------------------------------------
+    // 3. GENERATE COMPLETE RESPONSE (streams live)
+    // -------------------------------------------------------------------------
+
+    console.log("[CHAT] Starting complete streaming generation...");
+
+    const result = await generateCompleteChat({
+      baseMessages: messages,
+
+      model,
+
+      signal,
+
+      emit,
+    });
+
+    aiResponse = result.text;
+
+    if (result.aborted || signal?.aborted) {
+      console.log("[CHAT] Generation cancelled.");
+
+      return { ...state, aiResponse };
+    }
+
+    console.log("[CHAT] Generation completed.");
 
     console.log(
       `[CHAT] Total continuation requests: ${result.continuations}`,
     );
 
+    console.log(`[CHAT] Final finish reason: ${result.finishReason}`);
 
-    console.log(
-      `[CHAT] Final finish reason: ${result.finishReason}`,
-    );
-
+    if (result.error) {
+      console.warn(
+        "[CHAT] Answer is partial because a continuation failed:",
+        result.error.message,
+      );
+    }
 
     // -------------------------------------------------------------------------
-    // 8. DEDUCT CREDITS
+    // 4. DEDUCT CREDITS
     // -------------------------------------------------------------------------
 
     if (aiResponse.trim()) {
-      await deductCredits({
-        userId: state.userId,
-        agent: "chat",
-      });
+      try {
+        await deductCredits({
+          userId: state.userId,
+          agent: "chat",
+        });
+      } catch (error) {
+        // The user already received the answer; don't turn that into a failure.
+        console.error("[CHAT] Credit deduction failed:", error);
+      }
     }
 
-
     // -------------------------------------------------------------------------
-    // 9. RETURN COMPLETE RESPONSE
+    // 5. RETURN COMPLETE RESPONSE
     // -------------------------------------------------------------------------
 
-    return {
-      ...state,
-      aiResponse,
-    };
-
-
+    return { ...state, aiResponse };
   } catch (error) {
-
     // -------------------------------------------------------------------------
     // CANCELLATION
     // -------------------------------------------------------------------------
 
-    if (
-      signal?.aborted ||
-      error.name === "AbortError"
-    ) {
-      console.log(
-        "[CHAT] Generation cancelled.",
-      );
+    if (signal?.aborted || error.name === "AbortError") {
+      console.log("[CHAT] Generation cancelled.");
 
-      return {
-        ...state,
-        aiResponse,
-      };
+      return { ...state, aiResponse };
     }
-
 
     // -------------------------------------------------------------------------
     // ERROR
     // -------------------------------------------------------------------------
 
-    console.error(
-      "[CHAT] Generation error:",
-      error,
-    );
+    console.error("[CHAT] Generation error:", error);
 
-
-    /*
-     * If some content was already generated,
-     * preserve it instead of replacing it with an error.
-     */
+    // Only reached when nothing was generated (partial text is returned above).
     if (!aiResponse) {
       aiResponse =
         error?.error?.message ||
@@ -1156,10 +1172,6 @@ When asked to continue:
         "Sorry, I couldn't process your request.";
     }
 
-
-    return {
-      ...state,
-      aiResponse,
-    };
+    return { ...state, aiResponse };
   }
 };
